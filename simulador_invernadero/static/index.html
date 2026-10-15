@@ -1,0 +1,487 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Invernadero Virtual 3D — Gemelo Digital & Simulador de Cultivo</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <!-- Vendor scripts locales con fallback a CDN -->
+    <script src="/static/js/vendor/three.min.js"></script>
+    <script src="/static/js/vendor/OrbitControls.js"></script>
+    <script src="/static/js/vendor/chart.min.js"></script>
+</head>
+<body>
+
+    <!-- BARRA SUPERIOR (HEADER) -->
+    <header class="app-header">
+        <div class="brand">
+            <h1>AGRO-SIM 3D</h1>
+            <span class="sub">INVERNADERO DIGITAL TWIN</span>
+            <span id="wsStatus" class="status-badge offline">CONECTANDO...</span>
+        </div>
+
+        <div class="header-controls">
+            <!-- Reloj del cultivo -->
+            <div class="time-display">
+                <span id="dayBadge" class="badge-day">☀️ DÍA</span>
+                <span id="simClock" class="clock-text">Día 01 - 08:00</span>
+            </div>
+
+            <!-- Selector de velocidad de simulación -->
+            <div class="speed-group">
+                <button class="btn-speed" data-speed="1">1x</button>
+                <button class="btn-speed" data-speed="10">10x</button>
+                <button class="btn-speed active" data-speed="60">60x</button>
+                <button class="btn-speed" data-speed="300">300x</button>
+                <button class="btn-speed" data-speed="1000">1000x</button>
+            </div>
+
+            <button id="btnPause" class="btn-secondary">⏸ Pausa</button>
+            <button id="btnSkipDay" class="btn-secondary">⏭ +1 Día</button>
+            <button id="btnResetCrop" class="btn-danger">↺ Reiniciar</button>
+        </div>
+    </header>
+
+    <!-- CUERPO PRINCIPAL (3 COLUMNAS) -->
+    <main class="main-content">
+
+        <!-- COLUMNA IZQUIERDA: BIOLOGÍA Y ACTUADORES -->
+        <aside class="sidebar-left">
+
+            <!-- Selector de Planta (1 de 12) -->
+            <div class="panel-card" style="border-color: var(--accent-cyan);">
+                <div class="card-title">
+                    <span>🪴 Selección de Planta</span>
+                    <button id="btnToggleAuto" class="btn-glow" style="padding: 2px 8px; font-size: 0.7rem;">🤖 AUTO: ON</button>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center;">
+                    <select id="selectPlant" style="flex: 1; background: #000; color: var(--accent-cyan); border: 1px solid #334155; padding: 6px 10px; border-radius: 6px; font-weight: bold;">
+                        <option value="0">Planta 1 (OG Kush Auto)</option>
+                        <option value="1">Planta 2 (Gorilla Glue)</option>
+                        <option value="2">Planta 3 (Amnesia Haze)</option>
+                        <option value="3">Planta 4 (Northern Lights)</option>
+                        <option value="4">Planta 5 (OG Kush Auto)</option>
+                        <option value="5">Planta 6 (Gorilla Glue)</option>
+                        <option value="6">Planta 7 (Amnesia Haze)</option>
+                        <option value="7">Planta 8 (Northern Lights)</option>
+                        <option value="8">Planta 9 (OG Kush Auto)</option>
+                        <option value="9">Planta 10 (Gorilla Glue)</option>
+                        <option value="10">Planta 11 (Amnesia Haze)</option>
+                        <option value="11">Planta 12 (Northern Lights)</option>
+                    </select>
+                </div>
+                <div style="display: flex; gap: 8px; align-items: center; margin-top: 6px;">
+                    <span class="kpi-label">Etapa de manejo:</span>
+                    <select id="managementStage" style="flex: 1; background: #000; color: var(--accent-green); border: 1px solid #334155; padding: 5px; border-radius: 6px;">
+                        <option value="PLANTULA">Plántula — 0,5 L</option>
+                        <option value="CRECIMIENTO">Crecimiento — 5 L</option>
+                        <option value="FLORACION">Floración — 15 L</option>
+                    </select>
+                </div>
+                <button id="btnOpenConfig" class="btn-secondary" style="width: 100%; margin-top: 4px; font-size: 0.78rem;">⚙️ Configurar Riego P1 / P2 / P3</button>
+            </div>
+
+            <!-- Card: Biología del Cultivo -->
+            <div class="panel-card">
+                <div class="card-title">
+                    <span>🌱 Biología del Cultivo</span>
+                    <span id="cropStage" style="color: var(--accent-green);">Plántula</span>
+                </div>
+                <div class="kpi-row">
+                    <span class="kpi-label">Variedad:</span>
+                    <span id="cropStrain" class="kpi-val" style="color: var(--accent-cyan);">OG Kush Auto</span>
+                </div>
+                <div class="kpi-row">
+                    <span class="kpi-label">Altura:</span>
+                    <span id="cropHeight" class="kpi-val">5.0 cm</span>
+                </div>
+                <div class="kpi-row">
+                    <span class="kpi-label">Biomasa seca:</span>
+                    <span id="cropBiomass" class="kpi-val">2.0 g</span>
+                </div>
+                <div class="kpi-row">
+                    <span class="kpi-label">Salud radicular:</span>
+                    <span id="cropRootHealth" class="kpi-val">100%</span>
+                </div>
+                <div class="kpi-row">
+                    <span class="kpi-label">pH sustrato:</span>
+                    <span id="cropPH" class="kpi-val">5.90</span>
+                </div>
+                <div class="kpi-row">
+                    <span class="kpi-label">NPK disponible:</span>
+                    <span id="cropNPK" class="kpi-val">160 / 50 / 200 ppm</span>
+                </div>
+                <div class="kpi-row">
+                    <span class="kpi-label">Desarrollo flores:</span>
+                    <span id="cropBuds" class="kpi-val">0.0%</span>
+                </div>
+                <div class="kpi-row" style="margin-top: 4px;">
+                    <span class="kpi-label">Steering:</span>
+                    <span id="cropSteering" class="kpi-val" style="font-weight:bold;">🌿 VEGETATIVO</span>
+                </div>
+                <div class="kpi-row">
+                    <span class="kpi-label">Inducción floral:</span>
+                    <span id="cropFlowerInduced" class="kpi-val">—</span>
+                </div>
+            </div>
+
+            <!-- Card: Trasplante -->
+            <div class="panel-card" style="border-color: var(--accent-green);">
+                <div class="card-title">
+                    <span>🪴 Trasplante</span>
+                </div>
+                <div class="kpi-row">
+                    <span class="kpi-label">Maceta actual:</span>
+                    <span id="kpiCurrentPot" class="kpi-val" style="color: var(--accent-cyan);">500 ml</span>
+                </div>
+                <div class="slider-group" style="margin-top: 6px;">
+                    <div class="slider-label-row">
+                        <span>Nueva maceta [ml]:</span>
+                        <span id="valTransplantPot">5000 ml</span>
+                    </div>
+                    <input type="range" id="sliderTransplantPot" min="500" max="25000" step="500" value="5000">
+                </div>
+                <button id="btnTransplant" class="btn-glow" style="width: 100%; margin-top: 6px; font-size: 0.8rem;">🪴 Trasplantar Planta Seleccionada</button>
+                <div class="kpi-label" style="margin-top: 4px; line-height: 1.3;">Sin reinicio biológico: edad, altura y biomasa se preservan. vol_CC se recalcula para la nueva maceta.</div>
+
+
+            </div><!-- /card trasplante -->
+
+            <!-- Card: Actuadores y Riego -->
+            <div class="panel-card">
+                <div class="card-title">
+                    <span>🚿 Hidráulica & Riego</span>
+                </div>
+                <div class="actuator-item">
+                    <span class="kpi-label">Bomba P1 (Riego Diurno):</span>
+                    <span id="actPumpP1" class="act-off">OFF</span>
+                </div>
+                <div class="actuator-item">
+                    <span class="kpi-label">Válvula Planta Seleccionada:</span>
+                    <span id="actValve0" class="act-off">CERRADA</span>
+                </div>
+                <div class="kpi-row" style="margin-top: 4px;">
+                    <span class="kpi-label">Goteros:</span>
+                    <span id="kpiDrippers" class="kpi-val">3x @ 3.6 L/H</span>
+                </div>
+                <div style="display: flex; gap: 8px; margin-top: 6px;">
+                    <button id="btnShot" class="btn-glow" style="flex: 1;">⚡ Disparo Manual</button>
+                    <button id="btnEmptyTray" class="btn-secondary" title="Acción física manual; no modifica la tara de la celda.">🗑 Vaciar bandeja</button>
+                    <button id="btnTareTray" class="btn-secondary" title="Envía TA: fija el cero actual de la celda, incluso si hay agua.">⚖️ Tara (TA)</button>
+                </div>
+                <label class="kpi-label" style="display: block; margin-top: 7px; line-height: 1.35; cursor: pointer;">
+                    <input type="checkbox" id="autoTrayService"> Automatizar vaciado + TA al final de P2
+                </label>
+                <div class="kpi-label" style="margin-top: 4px; line-height: 1.35;">SIL: desagüe físico pasivo (τ = 30 min). Esta opción simula un equipo externo, no un actuador del firmware.</div>
+            </div>
+
+            <!-- Card: Asesor Agrónomo Dr. Cana -->
+            <div class="panel-card" style="flex: 1;">
+                <div class="card-title">
+                    <span>🤖 Asesor Agrónomo (Dr. Cana)</span>
+                </div>
+                <div id="advisorBox" class="advisor-box success">
+                    <span id="advisorMsg">Iniciando análisis agronómico del cultivo...</span>
+                </div>
+            </div>
+
+        </aside>
+
+        <!-- CENTRO: VISOR 3D THREE.JS -->
+        <section class="center-viewport">
+            <div id="canvas3d"></div>
+
+            <!-- HUD Overlay con KPIs flotantes sobre el 3D -->
+            <div class="viewport-overlay">
+                <div class="hud-badge">
+                    <div class="hud-label">Humedad Sustrato (VWC)</div>
+                    <div id="kpiVWC" class="hud-val" style="color: var(--accent-cyan);">38.0%</div>
+                </div>
+                <div class="hud-badge">
+                    <div class="hud-label">EC Sustrato</div>
+                    <div id="kpiEC" class="hud-val" style="color: var(--accent-orange);">2.40 mS</div>
+                </div>
+                <div class="hud-badge">
+                    <div class="hud-label">Déficit Vapor (VPD)</div>
+                    <div id="kpiVPD" class="hud-val" style="color: var(--accent-purple);">1.12 kPa</div>
+                </div>
+                <div class="hud-badge">
+                    <div class="hud-label">Escorrentía Bandeja</div>
+                    <div id="kpiTray" class="hud-val" style="color: var(--accent-green);">0.0 g</div>
+                </div>
+            </div>
+
+            <div class="camera-hint">
+                🖱️ Arrastrar para rotar 360° | Rueda para zoom | Clic derecho para desplazar
+            </div>
+        </section>
+
+        <!-- COLUMNA DERECHA: AJUSTES EN VIVO Y GRÁFICOS TELEMÉTRICOS -->
+        <aside class="sidebar-right">
+
+            <!-- Card: Controles de Clima y Solución Nutritiva -->
+            <div class="panel-card">
+                <div class="card-title">
+                    <span>⚙️ Microclima & Tanque</span>
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-label-row">
+                        <span>Temperatura Aire Diurna:</span>
+                        <span id="valTemp">25.5 °C</span>
+                    </div>
+                    <input type="range" id="sliderTemp" min="16" max="34" step="0.5" value="25.5">
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-label-row">
+                        <span>Humedad Relativa Diurna:</span>
+                        <span id="valRH">62.0 %</span>
+                    </div>
+                    <input type="range" id="sliderRH" min="30" max="85" step="1" value="62">
+                </div>
+
+                <div class="modal-section-title" style="margin-top:10px;">SOLUCIÓN BOMBA P1 — SUBIDA / MANUAL / P3</div>
+                <div class="modal-grid">
+                    <div class="field-item"><label>EC P1 [mS/cm]</label><input type="number" id="sol_p1_ec" min="0" max="6" step="0.1" value="2.0"></div>
+                    <div class="field-item"><label>pH P1</label><input type="number" id="sol_p1_ph" min="4.5" max="7.5" step="0.1" value="5.9"></div>
+                    <div class="field-item"><label>N P1 [ppm]</label><input type="number" id="sol_p1_n" min="0" max="400" step="5" value="160"></div>
+                    <div class="field-item"><label>P P1 [ppm]</label><input type="number" id="sol_p1_p" min="0" max="200" step="5" value="50"></div>
+                    <div class="field-item"><label>K P1 [ppm]</label><input type="number" id="sol_p1_k" min="0" max="500" step="5" value="200"></div>
+                </div>
+                <div class="modal-section-title" style="margin-top:10px; border-color:var(--accent-orange); color:var(--accent-orange);">SOLUCIÓN BOMBA P2 — MANTENIMIENTO</div>
+                <div class="modal-grid">
+                    <div class="field-item"><label>EC P2 [mS/cm]</label><input type="number" id="sol_p2_ec" min="0" max="6" step="0.1" value="2.4"></div>
+                    <div class="field-item"><label>pH P2</label><input type="number" id="sol_p2_ph" min="4.5" max="7.5" step="0.1" value="5.9"></div>
+                    <div class="field-item"><label>N P2 [ppm]</label><input type="number" id="sol_p2_n" min="0" max="400" step="5" value="130"></div>
+                    <div class="field-item"><label>P P2 [ppm]</label><input type="number" id="sol_p2_p" min="0" max="200" step="5" value="55"></div>
+                    <div class="field-item"><label>K P2 [ppm]</label><input type="number" id="sol_p2_k" min="0" max="500" step="5" value="230"></div>
+                </div>
+
+                <div class="slider-group">
+                    <div class="slider-label-row">
+                        <span>Dimmer LED (Potencia):</span>
+                        <span id="valLight">100 %</span>
+                    </div>
+                    <input type="range" id="sliderLight" min="0" max="100" step="5" value="100">
+                </div>
+
+                <div class="kpi-row" style="margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 6px;">
+                    <span class="kpi-label">Temp Actual: <b id="kpiTemp" style="color:#fff;">25.0°C</b></span>
+                    <span class="kpi-label">HR: <b id="kpiRH" style="color:#fff;">60%</b></span>
+                    <span class="kpi-label">PPFD: <b id="kpiPPFD" style="color:#fff;">950 µmol</b></span>
+                </div>
+            </div>
+
+            <!-- Card: Gráficos de Telemetría -->
+            <div class="panel-card" style="flex: 1;">
+                <div class="card-title">
+                    <span>📈 Telemetría en Tiempo Real</span>
+                </div>
+
+                <!-- Gráfico 1: VWC (%) y Curvas de Dryback -->
+                <div class="chart-box">
+                    <canvas id="chartVWC"></canvas>
+                </div>
+
+                <!-- Gráfico 2: EC Sustrato y Tanque -->
+                <div class="chart-box">
+                    <canvas id="chartEC"></canvas>
+                </div>
+
+                <!-- Gráfico 3: VPD y Temperatura -->
+                <div class="chart-box">
+                    <canvas id="chartVPD"></canvas>
+                </div>
+            </div>
+
+        </aside>
+
+    </main>
+
+    <!-- MODAL DE CONFIGURACIÓN DE RIEGO (3 ETAPAS) -->
+    <div id="modalConfig" class="modal-backdrop" style="display: none;">
+        <div class="modal-box" style="max-width: 780px;">
+            <div class="modal-header">
+                <h3 id="modalTitle">⚙️ CONFIGURACIÓN DE RIEGO — PLANTA 1</h3>
+                <button id="btnCloseModal" class="btn-close">&times;</button>
+            </div>
+            
+            <div class="modal-body">
+                <!-- HORARIO GLOBAL (idéntico a ajustes.html) -->
+                <div class="modal-section-title" style="border-color: #ffd600; color: #ffd600;">🕐 HORARIO GLOBAL (aplica a las 12 plantas)</div>
+                <div class="modal-grid">
+                    <div class="field-item">
+                        <label>LUCES ON [hora] (lucesOnHH)</label>
+                        <input type="number" step="1" min="0" max="23" id="cfg_luces_on_hh">
+                    </div>
+                    <div class="field-item">
+                        <label>LUCES ON [min] (lucesOnMM)</label>
+                        <input type="number" step="15" min="0" max="59" id="cfg_luces_on_mm" value="0">
+                    </div>
+                    <div class="field-item">
+                        <label>LUCES OFF [hora] (lucesOffHH)</label>
+                        <input type="number" step="1" min="0" max="24" id="cfg_luces_off_hh">
+                    </div>
+                    <div class="field-item">
+                        <label>LUCES OFF [min] (lucesOffMM)</label>
+                        <input type="number" step="15" min="0" max="59" id="cfg_luces_off_mm" value="0">
+                    </div>
+                    <div class="field-item">
+                        <label>P0 OFFSET [min desde luces ON]</label>
+                        <input type="number" step="5" min="0" id="cfg_p0_minutes">
+                    </div>
+                    <div class="field-item">
+                        <label>P2 INICIO [hora] (p2InicioHH)</label>
+                        <input type="number" step="1" min="0" max="23" id="cfg_p2_inicio_hh">
+                    </div>
+                    <div class="field-item">
+                        <label>P2 INICIO [min] (p2InicioMM)</label>
+                        <input type="number" step="15" min="0" max="59" id="cfg_p2_inicio_mm" value="0">
+                    </div>
+                    <div class="field-item">
+                        <label>P2 FIN [hora] (p2FinHH)</label>
+                        <input type="number" step="1" min="0" max="23" id="cfg_p2_fin_hh">
+                    </div>
+                    <div class="field-item">
+                        <label>P2 FIN [min] (p2FinMM)</label>
+                        <input type="number" step="15" min="0" max="59" id="cfg_p2_fin_mm" value="0">
+                    </div>
+                </div>
+                <div class="kpi-label" style="margin-top: 5px;">P0: dryback posterior al encendido (no se riega). P2 ventana: rango horario de mantenimiento diurno.</div>
+
+                <!-- TABS DE ETAPA DE MANEJO -->
+                <div style="display: flex; gap: 0; margin-top: 14px; border-bottom: 2px solid #334155;">
+                    <button class="stage-tab active" data-stage="PLANTULA" style="flex:1;">🌱 Plántula</button>
+                    <button class="stage-tab" data-stage="CRECIMIENTO" style="flex:1;">🌿 Crecimiento</button>
+                    <button class="stage-tab" data-stage="FLORACION" style="flex:1;">🌸 Floración</button>
+                </div>
+
+                <div id="stageTabContent">
+                    <!-- MACETA Y SUSTRATO -->
+                    <div class="modal-section-title" style="margin-top: 10px; border-color: var(--accent-green); color: var(--accent-green);">🪴 MACETA & SUSTRATO</div>
+                    <div class="modal-grid">
+                        <div class="field-item">
+                            <label>VOLUMEN ÚTIL DE SUSTRATO [ml]</label>
+                            <input type="number" step="100" id="cfg_pot_volume_ml">
+                        </div>
+                        <div class="field-item">
+                            <label>SUSTRATO DEL MODELO</label>
+                            <select id="cfg_substrate_type">
+                                <option value="COCO">Coco coir</option>
+                                <option value="ROCKWOOL">Rockwool</option>
+                                <option value="TURBA">Turba</option>
+                                <option value="SUELO">Suelo</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- CALIBRACIÓN CC -->
+                    <div class="modal-section-title" style="border-color: var(--accent-green); color: var(--accent-green);">🧪 ENSAYO CAPACIDAD DE CAMPO (CC)</div>
+                    <div class="modal-grid">
+                        <div class="field-item">
+                            <label>PULSO DE ENSAYO [ml]</label>
+                            <input type="number" step="10" value="150" id="cc_pulse_ml">
+                        </div>
+                        <div class="field-item">
+                            <label>ESPERA ENTRE PULSOS [min]</label>
+                            <input type="number" step="1" value="1" id="cc_wait_minutes">
+                        </div>
+                    </div>
+                    <button id="btnStartCcTest" class="btn-secondary" style="margin-top: 8px;">🧪 Ejecutar ensayo CC virtual</button>
+                    <div id="ccTestStatus" class="kpi-label" style="margin-top: 6px; line-height: 1.35;">El sustrato determina la retención de agua virtual.</div>
+
+                    <!-- FASE P1 -->
+                    <div class="modal-section-title">FASE P1 — SUBIDA MATUTINA HACIA CAPACIDAD DE CAMPO</div>
+                    <div class="modal-grid">
+                        <div class="field-item">
+                            <label>VWC MÍNIMO P1 (O) [%]</label>
+                            <input type="number" step="0.5" id="cfg_p1_vwc_min">
+                        </div>
+                        <div class="field-item">
+                            <label>OBJETIVO EC SUSTRATO P1 (Q) [mS/cm]</label>
+                            <input type="number" step="0.1" id="cfg_p1_ec_target">
+                        </div>
+                        <div class="field-item">
+                            <label>DISPARO (% DE CC) (T)</label>
+                            <input type="number" step="0.5" id="cfg_p1_shot_pc">
+                        </div>
+                        <div class="field-item">
+                            <label>TIEMPO ENTRE DISPAROS (CG) [min]</label>
+                            <input type="number" step="1" id="cfg_p1_tiempo_entre">
+                        </div>
+                        <div class="field-item">
+                            <label>RUNOFF MÁXIMO P1 (R) [ml]</label>
+                            <input type="number" step="10" id="cfg_p1_runoff_max">
+                        </div>
+                        <div class="field-item">
+                            <label>CAUDAL GOTERO (BU) [L/H]</label>
+                            <input type="number" step="0.1" id="cfg_caudal_gotero">
+                        </div>
+                        <div class="field-item">
+                            <label>GOTEROS X PLANTA (BV)</label>
+                            <input type="number" step="1" id="cfg_goteros_planta">
+                        </div>
+                        <div class="field-item">
+                            <label>CB REAL INSTALADA — SEGURIDAD [ml]</label>
+                            <input type="number" step="100" id="cfg_cap_bandeja">
+                        </div>
+                    </div>
+
+                    <!-- FASE P2 -->
+                    <div class="modal-section-title" style="margin-top: 15px; border-color: var(--accent-orange); color: var(--accent-orange);">FASE P2 — MANTENIMIENTO DIURNO</div>
+                    <div class="modal-grid">
+                        <div class="field-item">
+                            <label>VWC MÁXIMO P2 (U) [%]</label>
+                            <input type="number" step="0.5" id="cfg_p2_vwc_max">
+                        </div>
+                        <div class="field-item">
+                            <label>OBJETIVO EC SUSTRATO P2 (W) [mS/cm]</label>
+                            <input type="number" step="0.1" id="cfg_p2_ec_target">
+                        </div>
+                        <div class="field-item">
+                            <label>VWC MÍNIMO P2 (V) [%]</label>
+                            <input type="number" step="0.5" id="cfg_p2_vwc_min">
+                        </div>
+                        <div class="field-item">
+                            <label>DISPARO P2 (% DE CC) (Z)</label>
+                            <input type="number" step="0.5" id="cfg_p2_shot_pc">
+                        </div>
+                        <div class="field-item">
+                            <label>TIEMPO ENTRE DISPAROS P2 (CH) [min]</label>
+                            <input type="number" step="1" id="cfg_p2_tiempo_entre">
+                        </div>
+                        <div class="field-item">
+                            <label>RUNOFF MÁXIMO DIARIO (X) [ml]</label>
+                            <input type="number" step="20" id="cfg_p2_runoff_max">
+                        </div>
+                    </div>
+
+                    <!-- FASE P3 -->
+                    <div class="modal-section-title" style="margin-top: 15px; border-color: var(--accent-purple); color: var(--accent-purple);">FASE P3 — NOCHE / DRYBACK</div>
+                    <div class="modal-grid">
+                        <div class="field-item">
+                            <label>VWC MÍNIMO EMERGENCIA (AA) [%]</label>
+                            <input type="number" step="0.5" id="cfg_p3_vwc_min">
+                        </div>
+                        <div class="field-item">
+                            <label>pH ACTUAL SUSTRATO</label>
+                            <input type="number" step="0.1" id="cfg_substrate_ph">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <button id="btnSaveConfig" class="btn-glow">💾 Guardar en Planta Actual</button>
+                <button id="btnApplyAllConfig" class="btn-secondary">📋 Aplicar a las 12 Plantas</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- SCRIPTS DE LA APLICACIÓN -->
+    <script src="/static/js/greenhouse3d.js"></script>
+    <script src="/static/js/telemetry_charts.js"></script>
+    <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,519 @@
+/*
+  style.css - Estilo Cyber-AgTech / SCADA Invernadero Digital Twin
+*/
+
+:root {
+    --bg-dark: #0a0e14;
+    --card-bg: #121820;
+    --card-border: #1e293b;
+    --accent-cyan: #00e5ff;
+    --accent-green: #00e676;
+    --accent-orange: #ff9100;
+    --accent-red: #ff5252;
+    --accent-purple: #e040fb;
+    --text-primary: #eceff1;
+    --text-secondary: #90a4ae;
+    --text-muted: #546e7a;
+}
+
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+body {
+    background-color: var(--bg-dark);
+    color: var(--text-primary);
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+/* HEADER */
+.app-header {
+    height: 60px;
+    background: #0d131a;
+    border-bottom: 1px solid var(--card-border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    flex-shrink: 0;
+}
+
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.brand h1 {
+    font-size: 1.15rem;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    color: #ffffff;
+}
+
+.brand .sub {
+    font-size: 0.75rem;
+    color: var(--accent-cyan);
+    background: rgba(0, 229, 255, 0.1);
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid rgba(0, 229, 255, 0.2);
+}
+
+.header-controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.time-display {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #151d27;
+    padding: 6px 14px;
+    border-radius: 6px;
+    border: 1px solid var(--card-border);
+}
+
+.clock-text {
+    font-size: 0.95rem;
+    font-weight: 600;
+    color: #fff;
+    font-variant-numeric: tabular-nums;
+}
+
+.badge-day {
+    font-size: 0.75rem;
+    background: #f59e0b;
+    color: #000;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.badge-night {
+    font-size: 0.75rem;
+    background: #3b82f6;
+    color: #fff;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.speed-group {
+    display: flex;
+    background: #151d27;
+    border-radius: 6px;
+    padding: 2px;
+    border: 1px solid var(--card-border);
+}
+
+.btn-speed {
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    padding: 5px 10px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.2s;
+}
+
+.btn-speed:hover {
+    color: #fff;
+}
+
+.btn-speed.active {
+    background: var(--accent-cyan);
+    color: #000;
+}
+
+.btn-primary, .btn-secondary, .btn-glow, .btn-danger {
+    padding: 6px 14px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: all 0.2s;
+}
+
+.btn-secondary {
+    background: #1e293b;
+    color: #fff;
+    border-color: #334155;
+}
+
+.btn-secondary:hover {
+    background: #334155;
+}
+
+.btn-glow {
+    background: #10b981;
+    color: #000;
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.4);
+}
+
+.btn-danger {
+    background: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+    border-color: rgba(239, 68, 68, 0.4);
+}
+
+.btn-danger:hover {
+    background: rgba(239, 68, 68, 0.3);
+}
+
+/* MAIN LAYOUT */
+.main-content {
+    display: grid;
+    grid-template-columns: 320px 1fr 380px;
+    height: calc(100vh - 60px);
+    overflow: hidden;
+}
+
+/* SIDEBARS */
+.sidebar-left, .sidebar-right {
+    background: #0c1017;
+    border-right: 1px solid var(--card-border);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px;
+    overflow-y: auto;
+}
+
+.sidebar-right {
+    border-right: none;
+    border-left: 1px solid var(--card-border);
+}
+
+.panel-card {
+    background: var(--card-bg);
+    border: 1px solid var(--card-border);
+    border-radius: 8px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.card-title {
+    font-size: 0.78rem;
+    font-weight: 700;
+    letter-spacing: 0.8px;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    padding-bottom: 6px;
+}
+
+/* KPI GRID */
+.kpi-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.82rem;
+    padding: 3px 0;
+}
+
+.kpi-label {
+    color: var(--text-secondary);
+}
+
+.kpi-val {
+    font-weight: 600;
+    color: #fff;
+}
+
+/* ACTUATORS */
+.actuator-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #0e141c;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid #1a222d;
+}
+
+.act-on {
+    color: var(--accent-green);
+    font-weight: 700;
+    font-size: 0.75rem;
+}
+
+.act-off {
+    color: var(--text-muted);
+    font-weight: 600;
+    font-size: 0.75rem;
+}
+
+/* ADVISOR BOX */
+.advisor-box {
+    background: #111822;
+    border-radius: 6px;
+    padding: 10px;
+    font-size: 0.78rem;
+    line-height: 1.4;
+    border-left: 4px solid var(--accent-cyan);
+}
+
+.advisor-box.success { border-left-color: var(--accent-green); }
+.advisor-box.warning { border-left-color: var(--accent-orange); }
+.advisor-box.danger { border-left-color: var(--accent-red); }
+
+/* CENTER 3D VIEW */
+.center-viewport {
+    position: relative;
+    background: #05080c;
+    overflow: hidden;
+}
+
+#canvas3d {
+    width: 100%;
+    height: 100%;
+}
+
+.viewport-overlay {
+    position: absolute;
+    top: 15px;
+    left: 20px;
+    display: flex;
+    gap: 12px;
+    pointer-events: none;
+}
+
+.hud-badge {
+    background: rgba(18, 24, 32, 0.85);
+    backdrop-filter: blur(8px);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 8px 14px;
+    border-radius: 6px;
+}
+
+.hud-label {
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.hud-val {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #fff;
+    margin-top: 2px;
+}
+
+.camera-hint {
+    position: absolute;
+    bottom: 15px;
+    left: 20px;
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    background: rgba(0, 0, 0, 0.5);
+    padding: 4px 10px;
+    border-radius: 4px;
+    pointer-events: none;
+}
+
+/* SLIDERS */
+.slider-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+
+.slider-label-row {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+input[type="range"] {
+    width: 100%;
+    accent-color: var(--accent-cyan);
+    cursor: pointer;
+}
+
+/* CHARTS CONTAINER */
+.chart-box {
+    height: 140px;
+    position: relative;
+    margin-bottom: 8px;
+}
+
+/* STATUS BADGE */
+.status-badge {
+    font-size: 0.7rem;
+    font-weight: 700;
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+.status-badge.online {
+    background: rgba(16, 185, 129, 0.15);
+    color: #10b981;
+    border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.status-badge.offline {
+    background: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+}
+
+/* MODAL DE CONFIGURACIÓN */
+.modal-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.75);
+    backdrop-filter: blur(5px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+}
+
+.modal-box {
+    background: #0f1620;
+    border: 1px solid #334155;
+    border-radius: 10px;
+    width: 680px;
+    max-width: 95vw;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8);
+    overflow: hidden;
+}
+
+.modal-header {
+    padding: 14px 20px;
+    background: #16202c;
+    border-bottom: 1px solid #1e293b;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.modal-header h3 {
+    font-size: 0.95rem;
+    color: #fff;
+    font-weight: 700;
+}
+
+.btn-close {
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    font-size: 1.5rem;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.btn-close:hover {
+    color: #fff;
+}
+
+.modal-body {
+    padding: 20px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+.modal-section-title {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--accent-cyan);
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid rgba(0, 229, 255, 0.2);
+    padding-bottom: 4px;
+    margin-bottom: 12px;
+}
+
+.modal-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.field-item {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.field-item label {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+}
+
+.field-item input {
+    background: #000;
+    border: 1px solid #334155;
+    color: var(--accent-green);
+    padding: 7px 10px;
+    font-size: 0.88rem;
+    font-family: monospace;
+    border-radius: 6px;
+}
+
+.field-item input:focus {
+    outline: none;
+    border-color: var(--accent-cyan);
+}
+
+.modal-footer {
+    padding: 14px 20px;
+    background: #16202c;
+    border-top: 1px solid #1e293b;
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+}
+
+/* Stage tabs in config modal */
+.stage-tab {
+    background: transparent;
+    border: none;
+    color: #64748b;
+    padding: 10px 8px;
+    font-size: 0.82rem;
+    font-weight: 600;
+    cursor: pointer;
+    border-bottom: 3px solid transparent;
+    transition: all 0.2s;
+}
+.stage-tab:hover { color: #cbd5e1; }
+.stage-tab.active {
+    color: var(--accent-cyan);
+    border-bottom-color: var(--accent-cyan);
+    background: rgba(0,229,255,0.06);
+}
+.stage-tab[data-stage="CRECIMIENTO"].active {
+    color: var(--accent-green);
+    border-bottom-color: var(--accent-green);
+    background: rgba(0,255,135,0.06);
+}
+.stage-tab[data-stage="FLORACION"].active {
+    color: var(--accent-orange);
+    border-bottom-color: var(--accent-orange);
+    background: rgba(255,145,0,0.06);
+}
