@@ -176,6 +176,26 @@ class AutomaticIrrigationTests(unittest.TestCase):
         self.assertGreater(self.plant.ec, ec_before_p2)
         self.assertGreater(self.plant.ph, ph_before_p2)
 
+    def test_p2_hysteresis_stacks_shots_from_floor_up_to_max(self):
+        """Tras tocar el piso, P2 sigue disparando (1 por intervalo) hasta el máximo."""
+        self.env.set_management_stage(0, "CRECIMIENTO", update_env=True)
+        self.env.update_plant_config(0, {"p2_vwc_min": 40.0, "p2_vwc_max": 59.0})
+        self.env.time_speed = 1.0
+        self.env.sim_time_seconds = 10.99 * 3600
+        self.plant.W = self.plant.pot_ml * 0.405
+        self.plant.ultimo_disparo_sim_time = -99999.0
+        shots, was = 0, False
+        for _ in range(int(9.0 * 3600 / 15)):
+            self.env.step(15)
+            if self.env.fase_riego_actual() != "P2":
+                continue
+            act = self.plant.disparo_activo and self.plant.disparo_fase == "P2"
+            shots += act and not was
+            was = act
+        self.assertGreater(shots, 10, "debe apilar muchos disparos, no uno por descenso al piso")
+        self.assertGreater(self.plant.vwc, 50.0, "debe subir hacia el máximo configurado")
+        self.assertFalse(self.plant.p2_esperando_piso)
+
     def test_ec_targets_and_substrate_ph_are_configurable(self):
         self.env.update_plant_config(0, {"p1_ec_target": 3.1, "p2_ec_target": 2.8, "substrate_ph": 6.2})
         cfg = self.plant.config

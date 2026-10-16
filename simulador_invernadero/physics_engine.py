@@ -1108,7 +1108,10 @@ class GreenhouseEnvironment:
                     p.p2_esperando_piso = False
 
                 intervalo_ok = tiempo_desde_ultimo_min >= cfg.p2_tiempo_entre_min
-                vwc_bajo = p.vwc < cfg.p2_vwc_min
+                # Histéresis real (EjecucionRiegoP2.cpp:102): una vez que el VWC toca el
+                # piso (p2_vwc_min) el flag se limpia y se siguen apilando disparos, uno
+                # por intervalo, hasta alcanzar p2_vwc_max. NO se exige VWC < piso en cada
+                # disparo: eso cortaba la subida tras el primero.
                 # ── CORRECCIÓN CRÍTICA ──────────────────────────────────────────────────
                 # Usar runoff_fase_p2 (INDEPENDIENTE del runoff de P1).
                 # El firmware resetea runoffFaseP2=0 al entrar en FASE_P2_MANTENIMIENTO
@@ -1121,7 +1124,7 @@ class GreenhouseEnvironment:
                 # principal; EC sólo se usa para activar End-Flush o p2EcObjetivoAlcanzado.
                 ec_objetivo_ok = not getattr(p, 'p2_ec_objetivo_alcanzado', False)
 
-                if (not p.p2_esperando_piso and intervalo_ok and vwc_bajo
+                if (not p.p2_esperando_piso and intervalo_ok
                         and runoff_ok and ec_objetivo_ok):
                     # vwcPrevisto (EjecucionRiegoP2.cpp): proyección antes del disparo
                     # Si el shot dispararía el sustrato por encima de p2VwcMax, se bloquea.
