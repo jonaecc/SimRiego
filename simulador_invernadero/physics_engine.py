@@ -691,9 +691,11 @@ class GreenhouseEnvironment:
         self.pump_p1 = False
         self.pump_p2 = False
 
-        # En el SIL físico la bandeja evacúa a desagüe con tau = 1800 s.
-        # No corresponde a una bomba/relé ni a una orden automática TA.
-        self.tray_passive_drain_enabled = True
+        # Desagüe físico pasivo opcional (la bandeja evacúa a un desagüe con
+        # constante tau). Por defecto está APAGADO: sin vaciado, el drenaje se
+        # acumula en la celda de carga hasta que se vacía a mano (como en el
+        # equipo real). No es una bomba/relé ni una orden automática TA.
+        self.tray_passive_drain_enabled = False
         self.tray_drain_tau_seconds = 1800.0
         # Opción del simulador para representar un drenaje motorizado externo.
         # El firmware actual no expone este actuador: se modela por separado.
@@ -971,6 +973,12 @@ class GreenhouseEnvironment:
     def set_auto_tray_service(self, enabled):
         """Habilita un equipo externo que vacía y tara una vez al fin de P2."""
         self.auto_empty_and_tare_end_p2 = bool(enabled)
+
+    def set_tray_passive_drain(self, enabled, tau_seconds=None):
+        """Activa/desactiva el desagüe pasivo de la bandeja y fija su constante de tiempo."""
+        self.tray_passive_drain_enabled = bool(enabled)
+        if tau_seconds is not None:
+            self.tray_drain_tau_seconds = max(60.0, min(86400.0, float(tau_seconds)))
 
     def run_end_p2_tray_service(self):
         """Servicio diario seguro: vaciado físico primero, TA solamente en cero."""

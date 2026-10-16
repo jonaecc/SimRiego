@@ -79,7 +79,17 @@ class AutomaticIrrigationTests(unittest.TestCase):
         self.env.execute_automatic_irrigation_logic(1.0)
         self.assertTrue(self.plant.disparo_activo)
 
+    def test_tray_water_stays_until_emptied_when_passive_drain_is_off(self):
+        self.assertFalse(self.env.tray_passive_drain_enabled)
+        self.plant.tray_ml = 800.0
+        for _ in range(20):
+            self.env.step(30.0)  # 10 h simulados sin vaciado
+        self.assertEqual(self.plant.tray_ml, 800.0)
+        self.env.empty_tray_manually(0)
+        self.assertEqual(self.plant.tray_ml, 0.0)
+
     def test_sil_passive_tray_drain_is_physical_not_automatic_tare(self):
+        self.env.set_tray_passive_drain(True)
         self.plant.tray_ml = 1800.0
         self.env.step(30.0)  # 30 s simulados: e^(-30/1800)
         self.assertLess(self.plant.tray_ml, 1800.0)

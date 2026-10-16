@@ -59,6 +59,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     env.tare_tray(plant_id)
                 elif cmd == "set_auto_tray_service":
                     env.set_auto_tray_service(msg.get("enabled", False))
+                elif cmd == "set_tray_passive_drain":
+                    env.set_tray_passive_drain(msg.get("enabled", False), msg.get("tau_seconds"))
                 elif cmd == "start_cc_test":
                     env.start_field_capacity_test(
                         msg.get("plant_id", env.selected_plant_id),

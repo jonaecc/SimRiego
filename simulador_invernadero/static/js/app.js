@@ -192,6 +192,10 @@ document.addEventListener('DOMContentLoaded', () => {
         if (autoTrayService && document.activeElement !== autoTrayService) {
             autoTrayService.checked = e.auto_empty_and_tare_end_p2;
         }
+        const trayPassiveDrain = document.getElementById('trayPassiveDrain');
+        if (trayPassiveDrain && document.activeElement !== trayPassiveDrain) {
+            trayPassiveDrain.checked = e.tray_passive_drain_enabled;
+        }
 
         // Datos biológicos del cultivo
         document.getElementById('cropStage').textContent = `${p.management_stage_label} / ${p.stage}`;
@@ -347,6 +351,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('autoTrayService').addEventListener('change', (event) => {
         sendCmd({ cmd: 'set_auto_tray_service', enabled: event.target.checked });
+    });
+
+    document.getElementById('trayPassiveDrain').addEventListener('change', (event) => {
+        sendCmd({ cmd: 'set_tray_passive_drain', enabled: event.target.checked });
     });
 
     // Avanzar 1 Día
