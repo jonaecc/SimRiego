@@ -250,7 +250,7 @@ document.addEventListener('DOMContentLoaded', () => {
         let alertType = "normal";
 
         if (p.inundacion_critica) {
-            msg = `🚨 <b>RIEGO BLOQUEADO POR INUNDACIÓN (Planta ${p.id + 1}):</b> La celda lee ${p.tray_weight_g} g (CB: ${p.config.capacidad_bandeja_ml} ml). El SIL modela desagüe pasivo; también puedes vaciar físicamente y luego ejecutar TA con la bandeja vacía.`;
+            msg = `🚨 <b>RIEGO BLOQUEADO POR INUNDACIÓN (Planta ${p.id + 1}):</b> La celda lee ${p.tray_weight_g} g (CB: ${p.config.capacidad_bandeja_ml} ml). Vacía la bandeja (botón "Vaciar bandeja") y luego ejecuta TA con la bandeja vacía.`;
             alertType = "danger";
         } else if (p.tare_with_water) {
             msg = `⚠️ <b>TARA CON AGUA (Planta ${p.id + 1}):</b> TA dejó la lectura de la celda en cero con ${p.tray_actual_ml} ml físicos. Esto reproduce el firmware actual, pero puede ocultar una inundación: vacía físicamente la bandeja y vuelve a tarar.`;
@@ -348,7 +348,6 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('autoTrayService').addEventListener('change', (event) => {
         sendCmd({ cmd: 'set_auto_tray_service', enabled: event.target.checked });
     });
-
     // Avanzar 1 Día
     document.getElementById('btnSkipDay').addEventListener('click', () => {
         sendCmd({ cmd: 'skip_days', days: 1 });

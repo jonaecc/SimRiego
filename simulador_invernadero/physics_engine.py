@@ -451,11 +451,6 @@ class GreenhousePlantPhysics:
         """Lectura de la celda, ya afectada por la última tara (pesoFiltrado)."""
         return self.tray_ml - self.tray_tare_ml
 
-    def drain_tray_passively(self, dt_seconds, tau_seconds):
-        """Desagüe físico pasivo usado por el modelo SIL; no es un comando del firmware."""
-        if tau_seconds > 0.0 and self.tray_ml > 0.0:
-            self.tray_ml *= math.exp(-dt_seconds / tau_seconds)
-
     def _save_stage_profile(self):
         profile = self.stage_profiles[self.management_stage]
         profile.update({field: getattr(self.config, field) for field in IRRIGATION_FIELDS})
@@ -691,10 +686,10 @@ class GreenhouseEnvironment:
         self.pump_p1 = False
         self.pump_p2 = False
 
-        # En el SIL físico la bandeja evacúa a desagüe con tau = 1800 s.
-        # No corresponde a una bomba/relé ni a una orden automática TA.
-        self.tray_passive_drain_enabled = True
-        self.tray_drain_tau_seconds = 1800.0
+        # En crop steering el drenaje debe medirse, no desaparecer: la bandeja NO
+        # tiene desagüe pasivo. El agua se acumula en la celda de carga hasta que
+        # se vacía a mano (empty_tray_manually) o con el servicio opcional de fin
+        # de P2 (auto_empty_and_tare_end_p2).
         # Opción del simulador para representar un drenaje motorizado externo.
         # El firmware actual no expone este actuador: se modela por separado.
         self.auto_empty_and_tare_end_p2 = False
@@ -1108,7 +1103,10 @@ class GreenhouseEnvironment:
                     p.p2_esperando_piso = False
 
                 intervalo_ok = tiempo_desde_ultimo_min >= cfg.p2_tiempo_entre_min
-                vwc_bajo = p.vwc < cfg.p2_vwc_min
+                # Histéresis real (EjecucionRiegoP2.cpp:102): una vez que el VWC toca el
+                # piso (p2_vwc_min) el flag se limpia y se siguen apilando disparos, uno
+                # por intervalo, hasta alcanzar p2_vwc_max. NO se exige VWC < piso en cada
+                # disparo: eso cortaba la subida tras el primero.
                 # ── CORRECCIÓN CRÍTICA ──────────────────────────────────────────────────
                 # Usar runoff_fase_p2 (INDEPENDIENTE del runoff de P1).
                 # El firmware resetea runoffFaseP2=0 al entrar en FASE_P2_MANTENIMIENTO
@@ -1121,7 +1119,7 @@ class GreenhouseEnvironment:
                 # principal; EC sólo se usa para activar End-Flush o p2EcObjetivoAlcanzado.
                 ec_objetivo_ok = not getattr(p, 'p2_ec_objetivo_alcanzado', False)
 
-                if (not p.p2_esperando_piso and intervalo_ok and vwc_bajo
+                if (not p.p2_esperando_piso and intervalo_ok
                         and runoff_ok and ec_objetivo_ok):
                     # vwcPrevisto (EjecucionRiegoP2.cpp): proyección antes del disparo
                     # Si el shot dispararía el sustrato por encima de p2VwcMax, se bloquea.
@@ -1219,8 +1217,6 @@ class GreenhouseEnvironment:
                 fase_global=fase_global,
                 photoperiod_hours=photoperiod_hours
             )
-            if self.tray_passive_drain_enabled:
-                p.drain_tray_passively(dt_sim_seconds, self.tray_drain_tau_seconds)
 
         # Automatización opcional del invernadero, distinta del firmware de
         # riego: al final de P2 deja cada bandeja físicamente vacía y la tara.
@@ -1483,8 +1479,6 @@ class GreenhouseEnvironment:
                 "co2_ppm": self.co2_ppm,
                 "solution_p1": self.solution_p1.as_dict(),
                 "solution_p2": self.solution_p2.as_dict(),
-                "tray_passive_drain_enabled": self.tray_passive_drain_enabled,
-                "tray_drain_tau_seconds": self.tray_drain_tau_seconds,
                 "auto_empty_and_tare_end_p2": self.auto_empty_and_tare_end_p2,
                 "p2_inicio": self.p2_inicio_hour,
                 "p2_fin": self.p2_fin_hour,
