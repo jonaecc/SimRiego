@@ -212,6 +212,16 @@ class AutomaticIrrigationTests(unittest.TestCase):
         self.assertGreater(vwc_max, 55.0, "debe subir hacia el máximo configurado")
         self.assertLessEqual(vwc_max, 59.5, "no debe pasarse del máximo (corte en pleno riego)")
 
+    def test_shared_pump_reports_which_plants_are_irrigating(self):
+        """La bomba P2 es compartida: puede estar ON con la válvula de la planta enfocada cerrada."""
+        other = self.env.plants[5]
+        other.disparo_activo, other.disparo_fase, other.valve_cmd = True, "P2", True
+        self.env.pump_p2 = True
+        st = self.env.dump_state()
+        self.assertTrue(st["actuators"]["pump_p2"])
+        self.assertEqual(st["actuators"]["pump_p2_plants"], [6])
+        self.assertFalse(st["actuators"]["valve_0"], "la planta enfocada (1) no riega")
+
     def test_ec_targets_and_substrate_ph_are_configurable(self):
         self.env.update_plant_config(0, {"p1_ec_target": 3.1, "p2_ec_target": 2.8, "substrate_ph": 6.2})
         cfg = self.plant.config

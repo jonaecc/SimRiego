@@ -1548,6 +1548,12 @@ class GreenhouseEnvironment:
             "actuators": {
                 "pump_p1": self.pump_p1,
                 "pump_p2": self.pump_p2,
+                # Las bombas son únicas y compartidas por las 12 plantas: se encienden
+                # si CUALQUIER planta riega. Se informa quiénes las están usando.
+                "pump_p1_plants": [p.id + 1 for p in self.plants
+                                   if (p.valve_cmd and p.disparo_fase != "P2") or p.cc_test],
+                "pump_p2_plants": [p.id + 1 for p in self.plants
+                                   if p.valve_cmd and p.disparo_fase == "P2"],
                 "light_on": self.is_day,
                 "valve_0": sel_p.valve_open,
                 "valve_feedback_0": sel_p.valve_feedback
