@@ -686,7 +686,7 @@ class GreenhousePlantPhysics:
 class GreenhouseEnvironment:
     """Entorno global con 12 plantas y Controlador Automático de Riego (NodoControl SIL)."""
     def __init__(self):
-        self.sim_time_seconds = 8 * 3600.0
+        self.sim_time_seconds = 6 * 3600.0   # Día 1 arranca al encender la luz
         self.time_speed = 60.0
         self.is_paused = False
         self.auto_irrigation_mode = True   # Control automático por fases P1/P2/P3 activo
@@ -748,6 +748,11 @@ class GreenhouseEnvironment:
         self.room_stage = "PLANTULA"
         self.crop_events = []
         self.apply_stage_environment("PLANTULA")
+        # Día 1: el sustrato arranca a capacidad de campo (recién regado, como al sembrar).
+        for p in self.plants:
+            ec0 = p.ec
+            p.W = p.W_cc
+            p.S = p.W * ec0
 
     @property
     def hour_of_day(self):

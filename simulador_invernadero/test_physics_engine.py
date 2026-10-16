@@ -4,6 +4,14 @@ import unittest
 from physics_engine import GreenhouseEnvironment
 
 
+class InitialStateTests(unittest.TestCase):
+    def test_day_one_starts_at_lights_on_with_substrate_at_field_capacity(self):
+        env = GreenhouseEnvironment()
+        self.assertAlmostEqual(env.sim_time_seconds, 6 * 3600.0)
+        for p in env.plants:
+            self.assertAlmostEqual(p.vwc, p.vwc_cc, places=3)
+
+
 class AutomaticIrrigationTests(unittest.TestCase):
     def setUp(self):
         self.env = GreenhouseEnvironment()
@@ -21,6 +29,7 @@ class AutomaticIrrigationTests(unittest.TestCase):
         self.assertEqual(self.plant.disparo_fase, "P1")
 
     def test_auto_off_closes_everything(self):
+        self.env.sim_time_seconds = 8 * 3600.0  # pasado el P0 posterior al encendido
         self.plant.W = self.plant.pot_ml * 0.30
         self.env.step(0.05)
         self.assertTrue(self.env.pump_p1)
@@ -52,6 +61,7 @@ class AutomaticIrrigationTests(unittest.TestCase):
         self.assertFalse(self.plant.inundacion_critica)
 
     def test_flood_blocks_all_irrigation_then_clears_when_sensor_is_safe_and_valve_is_closed(self):
+        self.env.sim_time_seconds = 8 * 3600.0  # pasado el P0 posterior al encendido
         self.env.update_plant_config(0, {"capacidad_bandeja_ml": 100.0})
         self.plant.tray_ml = 120.0
         self.plant.W = self.plant.pot_ml * 0.30
