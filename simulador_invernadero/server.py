@@ -92,11 +92,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     cfg_data = msg.get("config", {})
                     env.update_plant_config(plant_id, cfg_data)
                 elif cmd == "update_schedule":
-                    if "p0_minutes" in msg: env.p1_offset_min = max(0.0, float(msg["p0_minutes"]))
-                    if "p2_inicio" in msg: env.p2_inicio_hour = float(msg["p2_inicio"])
-                    if "p2_fin" in msg: env.p2_fin_hour = float(msg["p2_fin"])
-                    if "luces_on" in msg: env.light_on_hour = float(msg["luces_on"])
-                    if "luces_off" in msg: env.light_off_hour = float(msg["luces_off"])
+                    env.update_schedule(msg)
+                elif cmd == "update_stage_schedule":
+                    env.update_stage_schedule(msg.get("stage", env.room_stage), msg)
+                elif cmd == "update_stage_profile":
+                    env.update_stage_profile(msg.get("plant_id", env.selected_plant_id),
+                                             msg.get("stage", "PLANTULA"), msg.get("config", {}))
+                elif cmd == "update_crop_plan":
+                    env.update_crop_plan(msg.get("stage", "PLANTULA"), msg.get("min_days"),
+                                         msg.get("max_days"), msg.get("biomass_target_g"))
                 elif cmd == "reset_crop":
                     env = GreenhouseEnvironment()
                 elif cmd == "transplant":

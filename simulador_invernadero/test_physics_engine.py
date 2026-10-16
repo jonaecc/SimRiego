@@ -184,5 +184,116 @@ class AutomaticIrrigationTests(unittest.TestCase):
         self.assertEqual(self.plant.ph, 6.2)
 
 
+class CropPlanTests(unittest.TestCase):
+    def setUp(self):
+        self.env = GreenhouseEnvironment()
+
+    def _make_ready(self, p, days, biomass):
+        p.stage_start_day = p.biology.age_days - days
+        p.biology.biomass_g = biomass
+
+    def test_seedling_to_growth_transplants_without_touching_biology(self):
+        p = self.env.plants[0]
+        self._make_ready(p, 12.0, 9.0)
+        bio_before = (p.biology.age_days, p.biology.biomass_g, p.biology.height_cm)
+        self.env.review_crop_plan()
+        self.assertEqual(p.management_stage, "CRECIMIENTO")
+        self.assertEqual(p.pot_ml, 5000.0)
+        self.assertEqual(bio_before, (p.biology.age_days, p.biology.biomass_g, p.biology.height_cm))
+        self.assertEqual(self.env.crop_events[-1]["transplant"], True)
+        self.assertFalse(self.env.crop_events[-1]["forced"])
+
+    def test_needs_both_days_and_biomass(self):
+        p = self.env.plants[0]
+        self._make_ready(p, 5.0, 50.0)   # biomasa de sobra, pocos días
+        self.env.review_crop_plan()
+        self.assertEqual(p.management_stage, "PLANTULA")
+        self._make_ready(p, 15.0, 3.0)   # días de sobra, poca biomasa
+        self.env.review_crop_plan()
+        self.assertEqual(p.management_stage, "PLANTULA")
+
+    def test_max_days_forces_transition_and_flags_it(self):
+        p = self.env.plants[0]
+        self._make_ready(p, 22.0, 3.0)
+        self.env.review_crop_plan()
+        self.assertEqual(p.management_stage, "CRECIMIENTO")
+        self.assertTrue(self.env.crop_events[-1]["forced"])
+
+    def _all_to_growth(self):
+        for p in self.env.plants:
+            self._make_ready(p, 12.0, 9.0)
+        self.env.review_crop_plan()
+
+    def test_flowering_switch_waits_for_all_plants(self):
+        self._all_to_growth()
+        self.assertEqual(self.env.room_stage, "CRECIMIENTO")
+        for p in self.env.plants[:-1]:
+            self._make_ready(p, 30.0, 100.0)
+        self._make_ready(self.env.plants[-1], 30.0, 20.0)
+        self.env.review_crop_plan()
+        self.assertEqual(self.env.room_stage, "CRECIMIENTO")
+        self.assertTrue(all(p.management_stage == "CRECIMIENTO" for p in self.env.plants))
+        self._make_ready(self.env.plants[-1], 30.0, 100.0)
+        self.env.review_crop_plan()
+        self.assertEqual(self.env.room_stage, "FLORACION")
+        self.assertTrue(all(p.management_stage == "FLORACION" for p in self.env.plants))
+
+    def test_flowering_keeps_pot_but_changes_irrigation_profile(self):
+        self._all_to_growth()
+        p = self.env.plants[0]
+        ec_target_growth = p.config.p1_ec_target
+        for q in self.env.plants:
+            self._make_ready(q, 30.0, 100.0)
+        self.env.review_crop_plan()
+        self.assertEqual(p.pot_ml, 5000.0)
+        self.assertFalse(self.env.crop_events[-1]["transplant"])
+        self.assertNotEqual(p.config.p1_ec_target, ec_target_growth)
+
+    def test_larger_flowering_pot_means_transplant_and_pot_never_shrinks(self):
+        self._all_to_growth()
+        p = self.env.plants[0]
+        p.stage_profiles["FLORACION"]["pot_volume_ml"] = 15000.0
+        for q in self.env.plants:
+            self._make_ready(q, 30.0, 100.0)
+        self.env.review_crop_plan()
+        self.assertEqual(p.pot_ml, 15000.0)
+        p.stage_profiles["CRECIMIENTO"]["pot_volume_ml"] = 1000.0
+        self.assertIsNone(p.advance_stage("FLORACION"))
+
+    def test_any_plant_at_max_days_forces_room_switch(self):
+        self._all_to_growth()
+        for q in self.env.plants:
+            self._make_ready(q, 30.0, 20.0)
+        self._make_ready(self.env.plants[3], 50.0, 20.0)
+        self.env.review_crop_plan()
+        self.assertEqual(self.env.room_stage, "FLORACION")
+        self.assertTrue(self.env.crop_events[-1]["forced"])
+
+    def test_12_12_switch_induces_flowering_and_no_autoflower_by_age(self):
+        p = self.env.plants[0]
+        p.biology.age_days = 60.0
+        for _ in range(20):
+            self.env.step(15.0 / self.env.time_speed)
+        self.assertFalse(p.biology.flower_induced)
+        self._all_to_growth()
+        for q in self.env.plants:
+            self._make_ready(q, 30.0, 100.0)
+        self.env.review_crop_plan()
+        self.assertEqual((self.env.light_off_hour - self.env.light_on_hour) % 24.0, 12.0)
+        for _ in range(20):
+            self.env.step(15.0 / self.env.time_speed)
+        self.assertTrue(p.biology.flower_induced)
+
+    def test_crop_plan_validation_and_non_active_profile_edit(self):
+        self.assertFalse(self.env.update_crop_plan("PLANTULA", min_days=30, max_days=10))
+        self.assertFalse(self.env.update_crop_plan("FLORACION", min_days=1))
+        self.assertTrue(self.env.update_crop_plan("PLANTULA", biomass_target_g=5))
+        self.assertEqual(self.env.crop_plan["PLANTULA"]["biomass_target_g"], 5.0)
+        self.assertTrue(self.env.update_stage_profile(0, "FLORACION", {"p1_ec_target": 3.3}))
+        p = self.env.plants[0]
+        self.assertEqual(p.management_stage, "PLANTULA")
+        self.assertEqual(p.stage_profiles["FLORACION"]["p1_ec_target"], 3.3)
+
+
 if __name__ == "__main__":
     unittest.main()

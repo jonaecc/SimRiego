@@ -85,6 +85,50 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
+    // Tarjeta "Plan de Cultivo": etapa, objetivos y registro de transiciones
+    const STAGE_NAMES = { PLANTULA: 'Plántula', CRECIMIENTO: 'Crecimiento', FLORACION: 'Floración' };
+    function renderCropPlan(s) {
+        const c = s.plant_focus.crop;
+        if (!c) return;
+        const setTxt = (id, txt) => { const el = document.getElementById(id); if (el) el.textContent = txt; };
+        setTxt('planRoomStage', `SALA: ${STAGE_NAMES[c.room_stage] || c.room_stage}`.toUpperCase());
+        setTxt('planDay', `${Math.floor(c.day)}`);
+        setTxt('planStageDays', `${STAGE_NAMES[c.stage]} · ${c.stage_days.toFixed(1)} d`);
+        const bar = document.getElementById('planBioBar');
+        if (!c.next_stage) {
+            setTxt('planNext', '— (etapa final)');
+            setTxt('planBioTxt', `${c.biomass_g} g`);
+            setTxt('planDaysTxt', '—');
+            setTxt('planStatus', 'Etapa final');
+            if (bar) bar.style.width = '100%';
+            setTxt('planPot', `${c.stage === 'FLORACION' ? '' : ''}${(s.plant_focus.pot_volume_ml / 1000).toFixed(1)} L`);
+        } else {
+            const pct = c.biomass_target_g > 0 ? Math.min(100, 100 * c.biomass_g / c.biomass_target_g) : 100;
+            if (bar) { bar.style.width = `${pct}%`; bar.style.background = c.biomass_ok ? 'var(--accent-green)' : 'var(--accent-orange)'; }
+            setTxt('planNext', STAGE_NAMES[c.next_stage]);
+            setTxt('planBioTxt', `${c.biomass_g} / ${c.biomass_target_g} g`);
+            setTxt('planDaysTxt', `${c.stage_days.toFixed(1)} d  (mín ${c.min_days} – máx ${c.max_days})`);
+            let st;
+            if (c.forced) st = '⚠️ forzado por días máximos';
+            else if (c.waiting_for_room) st = '✅ lista · esperando a la sala';
+            else if (c.ready) st = '✅ lista para pasar';
+            else st = `⏳ creciendo (${c.days_ok ? '' : 'faltan días'}${!c.days_ok && !c.biomass_ok ? ' y ' : ''}${c.biomass_ok ? '' : 'falta biomasa'})`;
+            setTxt('planStatus', st);
+            setTxt('planPot', c.will_transplant
+                ? `${(s.plant_focus.pot_volume_ml / 1000).toFixed(1)} L → ${(c.pot_next_ml / 1000).toFixed(1)} L (trasplante)`
+                : `${(s.plant_focus.pot_volume_ml / 1000).toFixed(1)} L (se mantiene)`);
+        }
+        const ev = document.getElementById('planEvents');
+        if (ev) {
+            const evs = (s.crop_events || []).slice().reverse();
+            ev.innerHTML = evs.length ? evs.map(e =>
+                `Día ${e.day} · P${e.plant + 1}: ${STAGE_NAMES[e.from]} → ${STAGE_NAMES[e.to]} (${e.biomass_g} g)` +
+                `${e.transplant ? ` · trasplante ${e.pot_from_ml / 1000}→${e.pot_to_ml / 1000} L` : ' · misma maceta'}` +
+                `${e.forced ? ' · <b style="color:var(--accent-orange)">forzado</b>' : ''}${e.note ? ` · ${e.note}` : ''}`
+            ).join('<br>') : 'Sin transiciones todavía.';
+        }
+    }
+
     // 3. Actualización de datos numéricos y paneles en pantalla
     function updateUI(s) {
         const c = s.clock;
@@ -119,6 +163,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (managementStage && document.activeElement !== managementStage) {
             managementStage.value = p.management_stage;
         }
+
+        renderCropPlan(s);
 
         // Actuadores
         const pumpP1El = document.getElementById('actPumpP1');
@@ -250,7 +296,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     document.getElementById('managementStage').addEventListener('change', (e) => {
         const plantId = latestState ? latestState.selected_plant_id : 0;
+        const current = latestState ? latestState.plant_focus.management_stage : e.target.value;
+        if (!confirm('Salto manual: la planta se reinicia biológicamente a esa etapa (edad, biomasa, altura). ' +
+                     'El avance normal es automático según el Plan de Cultivo. ¿Continuar?')) {
+            e.target.value = current;
+            e.target.blur();
+            return;
+        }
         sendCmd({ cmd: 'set_management_stage', plant_id: plantId, stage: e.target.value });
+        e.target.blur();
     });
 
     // Toggle modo automático
@@ -376,20 +430,25 @@ document.addEventListener('DOMContentLoaded', () => {
     let activeStageTab = null; // Will track which stage tab is currently displayed
 
     function populateScheduleFromState() {
-        const env = latestState.environment;
-        const lonH = Math.floor(env.light_on_hour || 6);
-        const lonM = Math.round(((env.light_on_hour || 6) % 1) * 60);
-        const loffH = Math.floor(env.light_off_hour || 24);
-        const loffM = Math.round(((env.light_off_hour || 24) % 1) * 60);
-        const p2iH = Math.floor(env.p2_inicio || 11);
-        const p2iM = Math.round(((env.p2_inicio || 11) % 1) * 60);
-        const p2fH = Math.floor(env.p2_fin || 20);
-        const p2fM = Math.round(((env.p2_fin || 20) % 1) * 60);
+        // Horario guardado para la etapa seleccionada en la pestaña (no el activo de la sala).
+        const sch = (latestState.stage_schedules && latestState.stage_schedules[activeStageTab]) || {};
+        const env = {
+            light_on_hour: sch.light_on_hour, light_off_hour: sch.light_off_hour,
+            p2_inicio: sch.p2_inicio_hour, p2_fin: sch.p2_fin_hour, p0_minutes: sch.p1_offset_min,
+        };
+        const lonH = Math.floor(env.light_on_hour ?? 6);
+        const lonM = Math.round(((env.light_on_hour ?? 6) % 1) * 60);
+        const loffH = Math.floor(env.light_off_hour ?? 24);
+        const loffM = Math.round(((env.light_off_hour ?? 24) % 1) * 60);
+        const p2iH = Math.floor(env.p2_inicio ?? 11);
+        const p2iM = Math.round(((env.p2_inicio ?? 11) % 1) * 60);
+        const p2fH = Math.floor(env.p2_fin ?? 20);
+        const p2fM = Math.round(((env.p2_fin ?? 20) % 1) * 60);
         document.getElementById('cfg_luces_on_hh').value = lonH;
         document.getElementById('cfg_luces_on_mm').value = lonM;
         document.getElementById('cfg_luces_off_hh').value = loffH;
         document.getElementById('cfg_luces_off_mm').value = loffM;
-        document.getElementById('cfg_p0_minutes').value = env.p0_minutes || 60;
+        document.getElementById('cfg_p0_minutes').value = env.p0_minutes ?? 60;
         document.getElementById('cfg_p2_inicio_hh').value = p2iH;
         document.getElementById('cfg_p2_inicio_mm').value = p2iM;
         document.getElementById('cfg_p2_fin_hh').value = p2fH;
@@ -398,12 +457,23 @@ document.addEventListener('DOMContentLoaded', () => {
 
     function populateModalWithPlantConfig(cfg, plantId) {
         document.getElementById('modalTitle').textContent = `⚙️ CONFIGURACIÓN DE RIEGO — PLANTA ${plantId + 1}`;
-        populateScheduleFromState();
         // Stage tab active sync
         if (!activeStageTab) activeStageTab = latestState.plant_focus.management_stage;
+        populateScheduleFromState();
         document.querySelectorAll('.stage-tab').forEach(t => {
             t.classList.toggle('active', t.dataset.stage === activeStageTab);
         });
+        // Plan de etapa (la etapa final no tiene salida)
+        const plan = (latestState.crop_plan || {})[activeStageTab];
+        const isFinal = activeStageTab === 'FLORACION';
+        document.getElementById('planFields').style.display = isFinal ? 'none' : '';
+        document.getElementById('planFinalNote').style.display = isFinal ? '' : 'none';
+        if (plan) {
+            document.getElementById('cfg_plan_min_days').value = plan.min_days;
+            document.getElementById('cfg_plan_max_days').value = plan.max_days;
+            document.getElementById('cfg_plan_biomass').value = plan.biomass_target_g;
+        }
+        if (cfg.substrate_ph === undefined) cfg = { ...cfg, substrate_ph: latestState.plant_focus.config.substrate_ph };
         // P1
         document.getElementById('cfg_pot_volume_ml').value = cfg.pot_volume_ml;
         document.getElementById('cfg_substrate_type').value = latestState.plant_focus.substrate_type;
@@ -474,12 +544,34 @@ document.addEventListener('DOMContentLoaded', () => {
         modalConfig.style.display = 'none';
     });
 
+    function readPlanFromModal() {
+        return {
+            min_days: parseFloat(document.getElementById('cfg_plan_min_days').value),
+            max_days: parseFloat(document.getElementById('cfg_plan_max_days').value),
+            biomass_target_g: parseFloat(document.getElementById('cfg_plan_biomass').value),
+        };
+    }
+
+    // Envía plan de la etapa + horario de la etapa (la sala lo aplica al entrar en ella).
+    function sendStagePlanAndSchedule() {
+        const stage = activeStageTab;
+        if (stage !== 'FLORACION') {
+            const plan = readPlanFromModal();
+            if (plan.max_days < plan.min_days) {
+                alert('Los días máximos deben ser ≥ a los días mínimos.');
+                return false;
+            }
+            sendCmd({ cmd: 'update_crop_plan', stage, ...plan });
+        }
+        sendCmd({ cmd: 'update_stage_schedule', stage, ...readScheduleFromModal() });
+        return true;
+    }
+
     btnSaveConfig.addEventListener('click', () => {
         const plantId = latestState ? latestState.selected_plant_id : 0;
-        const cfg = readModalConfig();
-        const sched = readScheduleFromModal();
-        sendCmd({ cmd: 'update_plant_config', plant_id: plantId, config: cfg });
-        sendCmd({ cmd: 'update_schedule', ...sched });
+        if (!sendStagePlanAndSchedule()) return;
+        // Edita el perfil de ESA etapa sin activarla ni tocar la biología.
+        sendCmd({ cmd: 'update_stage_profile', plant_id: plantId, stage: activeStageTab, config: readModalConfig() });
         modalConfig.style.display = 'none';
     });
 
@@ -499,12 +591,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
     btnApplyAllConfig.addEventListener('click', () => {
         if (confirm("¿Aplicar esta configuración a las 12 plantas del sistema?")) {
+            if (!sendStagePlanAndSchedule()) return;
             const cfg = readModalConfig();
-            const sched = readScheduleFromModal();
             for (let i = 0; i < 12; i++) {
-                sendCmd({ cmd: 'update_plant_config', plant_id: i, config: cfg });
+                sendCmd({ cmd: 'update_stage_profile', plant_id: i, stage: activeStageTab, config: cfg });
             }
-            sendCmd({ cmd: 'update_schedule', ...sched });
             modalConfig.style.display = 'none';
         }
     });
@@ -517,7 +608,7 @@ document.addEventListener('DOMContentLoaded', () => {
             activeStageTab = stage;
             document.querySelectorAll('.stage-tab').forEach(t => t.classList.toggle('active', t.dataset.stage === stage));
             const plantId = latestState ? latestState.selected_plant_id : 0;
-            sendCmd({ cmd: 'set_management_stage', plant_id: plantId, stage: stage });
+            // Solo cambia la pestaña mostrada: NO cambia la etapa real de la planta.
             if (latestState && latestState.plant_focus) {
                 const p = latestState.plant_focus;
                 const cfg = (p.stage_profiles && p.stage_profiles[stage]) ? p.stage_profiles[stage] : p.config;
