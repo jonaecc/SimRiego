@@ -79,21 +79,16 @@ class AutomaticIrrigationTests(unittest.TestCase):
         self.env.execute_automatic_irrigation_logic(1.0)
         self.assertTrue(self.plant.disparo_activo)
 
-    def test_tray_water_stays_until_emptied_when_passive_drain_is_off(self):
-        self.assertFalse(self.env.tray_passive_drain_enabled)
+    def test_tray_has_no_passive_drain_water_stays_until_emptied(self):
+        """El drenaje es medible: solo desaparece al vaciar (manual o servicio fin de P2)."""
         self.plant.tray_ml = 800.0
+        self.env.auto_irrigation_mode = False   # solo se observa la bandeja
         for _ in range(20):
-            self.env.step(30.0)  # 10 h simulados sin vaciado
+            self.env.step(30.0)  # 10 h simuladas sin vaciado
         self.assertEqual(self.plant.tray_ml, 800.0)
         self.env.empty_tray_manually(0)
         self.assertEqual(self.plant.tray_ml, 0.0)
-
-    def test_sil_passive_tray_drain_is_physical_not_automatic_tare(self):
-        self.env.set_tray_passive_drain(True)
-        self.plant.tray_ml = 1800.0
-        self.env.step(30.0)  # 30 s simulados: e^(-30/1800)
-        self.assertLess(self.plant.tray_ml, 1800.0)
-        self.assertEqual(self.plant.tray_tare_ml, 0.0)
+        self.assertEqual(self.plant.tray_tare_ml, 0.0, "vaciar a mano no modifica la tara")
 
     def test_optional_external_service_empties_then_tares_at_end_of_p2(self):
         self.env.set_auto_tray_service(True)
