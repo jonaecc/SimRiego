@@ -189,7 +189,7 @@ class AutomaticIrrigationTests(unittest.TestCase):
         self.env.sim_time_seconds = 10.99 * 3600
         self.plant.W = self.plant.pot_ml * 0.405
         self.plant.ultimo_disparo_sim_time = -99999.0
-        shots, was = 0, False
+        shots, was, vwc_max = 0, False, 0.0
         for _ in range(int(9.0 * 3600 / 15)):
             self.env.step(15)
             if self.env.fase_riego_actual() != "P2":
@@ -197,9 +197,10 @@ class AutomaticIrrigationTests(unittest.TestCase):
             act = self.plant.disparo_activo and self.plant.disparo_fase == "P2"
             shots += act and not was
             was = act
+            vwc_max = max(vwc_max, self.plant.vwc)
         self.assertGreater(shots, 10, "debe apilar muchos disparos, no uno por descenso al piso")
-        self.assertGreater(self.plant.vwc, 50.0, "debe subir hacia el máximo configurado")
-        self.assertFalse(self.plant.p2_esperando_piso)
+        self.assertGreater(vwc_max, 55.0, "debe subir hacia el máximo configurado")
+        self.assertLessEqual(vwc_max, 59.5, "no debe pasarse del máximo (corte en pleno riego)")
 
     def test_ec_targets_and_substrate_ph_are_configurable(self):
         self.env.update_plant_config(0, {"p1_ec_target": 3.1, "p2_ec_target": 2.8, "substrate_ph": 6.2})
@@ -207,6 +208,69 @@ class AutomaticIrrigationTests(unittest.TestCase):
         self.assertEqual(cfg.p1_ec_target, 3.1)
         self.assertEqual(cfg.p2_ec_target, 2.8)
         self.assertEqual(self.plant.ph, 6.2)
+
+
+class EvapotranspirationTests(unittest.TestCase):
+    def _daily_et_ml(self, plant, hours_day=18.0):
+        sol = GreenhouseEnvironment().solution_p1
+        et0 = plant.total_et_ml
+        for h in range(24):
+            is_day = h < hours_day
+            for _ in range(60):
+                plant.W = max(plant.W, 0.55 * plant.pot_ml)   # sin estrés hídrico: mide la demanda
+                plant.step(60.0, is_day, 1.1, 25.0, False, sol, 1.0)
+        return plant.total_et_ml - et0
+
+    def test_transpiration_scales_with_plant_size_not_with_stage(self):
+        env = GreenhouseEnvironment()
+        small, big = env.plants[0], env.plants[1]
+        for p in (small, big):
+            env.update_plant_config(p.id, {"pot_volume_ml": 5000})
+        small.biology.biomass_g, big.biology.biomass_g = 5.0, 100.0
+        et_small, et_big = self._daily_et_ml(small), self._daily_et_ml(big)
+        self.assertGreater(et_big, 5.0 * et_small)
+        self.assertTrue(600.0 < et_big < 2500.0, f"planta vegetativa de 100 g: {et_big:.0f} mL/día")
+
+    def test_seedling_uses_a_small_fraction_of_its_pot_per_day(self):
+        env = GreenhouseEnvironment()
+        seedling = env.plants[0]
+        self.assertEqual(seedling.pot_ml, 500.0)
+        self.assertLess(self._daily_et_ml(seedling), 0.15 * seedling.pot_ml)
+
+    def test_mature_flowering_plant_has_high_daily_demand(self):
+        env = GreenhouseEnvironment()
+        p = env.plants[0]
+        env.update_plant_config(0, {"pot_volume_ml": 15000})
+        p.biology.biomass_g = 200.0
+        et = self._daily_et_ml(p, hours_day=12.0)
+        self.assertTrue(2500.0 < et < 6000.0, f"floración madura: {et:.0f} mL/día")
+
+    def test_leaf_area_grows_continuously_with_biomass(self):
+        env = GreenhouseEnvironment()
+        bio = env.plants[0].biology
+        areas = []
+        for grams in (2.0, 12.0, 42.0, 100.0, 238.0):
+            bio.biomass_g = grams
+            areas.append(bio.leaf_area_m2)
+        self.assertEqual(areas, sorted(areas))
+        self.assertLess(areas[0], 0.02)
+        self.assertGreater(areas[-1], 1.0)
+
+    def test_shot_volume_does_not_depend_on_the_time_step(self):
+        """Un disparo de 120 s entrega lo mismo a 3 s de paso que a 300 s (antes: 2,5 veces más)."""
+        volumes = []
+        for dt in (3.0, 300.0):
+            env = GreenhouseEnvironment()
+            env.time_speed = 1.0
+            p = env.plants[0]
+            self.assertTrue(env.trigger_shot(0, duration_seconds=120.0))
+            irr0 = p.total_irrigation_ml
+            for _ in range(int(900 / dt)):
+                env.step(dt)
+            volumes.append(p.total_irrigation_ml - irr0)
+        expected = p.config.flow_ml_min * p.dripper_variance * 2.0
+        for v in volumes:
+            self.assertAlmostEqual(v, expected, delta=0.08 * expected)
 
 
 class CropPlanTests(unittest.TestCase):
@@ -268,6 +332,7 @@ class CropPlanTests(unittest.TestCase):
         p = self.env.plants[0]
         ec_target_growth = p.config.p1_ec_target
         for q in self.env.plants:
+            q.stage_profiles["FLORACION"]["pot_volume_ml"] = 5000.0
             self._make_ready(q, 30.0, 100.0)
         self.env.review_crop_plan()
         self.assertEqual(p.pot_ml, 5000.0)

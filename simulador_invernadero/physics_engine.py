@@ -124,20 +124,20 @@ DEFAULT_STAGE_PROFILES = {
         p1_vwc_min=46.0, p1_ec_target=2.8, p1_runoff_max=300.0, p1_vol_cc=3000.0, p1_shot_pc=4.5, p1_tiempo_entre_min=15,
         p2_vwc_min=50.0, p2_vwc_max=57.0, p2_vwc_cc_ref=60.0, p2_ec_target=9.0, p2_runoff_max=450.0, p2_vol_cc=3000.0, p2_shot_pc=2.5, p2_tiempo_entre_min=25, p3_vwc_min=30.0),
     # Floración: maceta de 15 L, dryback más agresivo (generativo), fotoperiodo 12/12
-    # Por defecto la maceta de floración es la misma que la de crecimiento (5 L):
-    # muchos cultivadores no trasplantan al pasar a floración y solo cambian el
-    # riego. Si se configura una maceta mayor, el paso incluye trasplante.
-    "FLORACION": stage_profile(5000.0, 60.0, 15.0, capacidad_bandeja_ml=1200.0,
+    # Con la transpiración realista una planta madura consume ~2.8 L/día: una maceta
+    # de 5 L se seca hasta ~15% VWC, así que el trasplante a 15 L ocurre al pasar a
+    # floración. Si se configura una maceta igual o menor, se conserva la actual.
+    "FLORACION": stage_profile(15000.0, 60.0, 15.0, capacidad_bandeja_ml=2400.0,
         caudal_gotero_lh=3.0, goteros_planta=2,
         p1_vwc_min=36.0, p1_ec_target=4.2, p1_runoff_max=300.0, p1_vol_cc=3000.0, p1_shot_pc=4.0, p1_tiempo_entre_min=15,
-        p2_vwc_min=40.0, p2_vwc_max=50.0, p2_vwc_cc_ref=60.0, p2_ec_target=9.0, p2_runoff_max=450.0, p2_vol_cc=3000.0, p2_shot_pc=2.0, p2_tiempo_entre_min=30, p3_vwc_min=24.0),
+        p2_vwc_min=40.0, p2_vwc_max=50.0, p2_vwc_cc_ref=60.0, p2_ec_target=9.0, p2_runoff_max=450.0, p2_vol_cc=3000.0, p2_shot_pc=2.0, p2_tiempo_entre_min=20, p3_vwc_min=24.0),
 }
 
 
 STAGE_SCHEDULES = {
     "PLANTULA": {"light_on_hour": 6.0, "light_off_hour": 24.0, "p1_offset_min": 60.0, "p2_inicio_hour": 11.0, "p2_fin_hour": 20.0},
     "CRECIMIENTO": {"light_on_hour": 6.0, "light_off_hour": 24.0, "p1_offset_min": 60.0, "p2_inicio_hour": 11.0, "p2_fin_hour": 20.0},
-    "FLORACION": {"light_on_hour": 6.0, "light_off_hour": 18.0, "p1_offset_min": 60.0, "p2_inicio_hour": 10.5, "p2_fin_hour": 14.5},
+    "FLORACION": {"light_on_hour": 6.0, "light_off_hour": 18.0, "p1_offset_min": 60.0, "p2_inicio_hour": 10.5, "p2_fin_hour": 17.5},
 }
 
 STAGE_NUTRIENT_SOLUTIONS = {
@@ -179,6 +179,24 @@ DEFAULT_CROP_PLAN = {
 }
 NEXT_STAGE = {"PLANTULA": "CRECIMIENTO", "CRECIMIENTO": "FLORACION", "FLORACION": None}
 
+# ---------------------------------------------------------------------------
+# EVAPOTRANSPIRACIÓN (calibrada por superficie)
+# ---------------------------------------------------------------------------
+# Transpiración con luces ON a VPD 1,1 kPa y exposición 1,0, por m² de hoja.
+# 3,0 mL/min/m² ≈ 3,2 L/m²/día a 18 h de luz: una planta vegetativa de 0,37 m²
+# gasta ~1,2 L/día y una en floración de ~1,5 m², ~3,5 L/día (12 h de luz).
+K_TRANSP_DAY = 3.0
+K_TRANSP_NIGHT = 0.45          # estomas casi cerrados: 15 % del diurno
+# Evaporación directa del sustrato descubierto (≈2 L/m²/día con luces ON).
+K_EVAP_DAY = 1.85
+K_EVAP_NIGHT = 0.55
+
+
+def pot_surface_area_m2(pot_ml):
+    """Superficie libre de una maceta cilíndrica de altura ≈1,2 × diámetro."""
+    d_cm = (max(pot_ml, 50.0) / 0.942) ** (1.0 / 3.0)
+    return math.pi * (d_cm / 2.0) ** 2 / 10000.0
+
 
 class PlantBiology:
     """Modelo biológico individual con fenotipo y respuesta fisiológica."""
@@ -194,7 +212,6 @@ class PlantBiology:
         self.age_days = 1.0
         self.height_cm = 5.0 * vigor_factor
         self.max_height_cm = 95.0 * vigor_factor
-        self.leaf_area_m2 = 0.005 * vigor_factor
         self.biomass_g = 2.0 * vigor_factor
         self.root_health = 100.0
         self.stage = CropStage.GERMINATION
@@ -213,6 +230,16 @@ class PlantBiology:
         self.buds_size = 0.0
         self.trichomes_amber = 0.0
 
+    @property
+    def leaf_area_m2(self):
+        """Área foliar [m²] (alometría): crece de forma continua con la biomasa.
+
+        LA = 0.00265 · B^1.177 (≈0.006 m² a 2 g, 0.05 a 12 g, 0.37 a 67 g, 1.7 a 238 g),
+        con tope por autosombreado. Reemplaza los valores escalón anteriores y es la
+        base de la transpiración: la planta transpira según su tamaño, no según la etapa.
+        """
+        return min(2.2, 0.00265 * max(self.biomass_g, 0.1) ** 1.177)
+
     def sync_to_stage(self, stage):
         """Sincroniza la morfología base (solo para resets o inicialización explícita)."""
         if stage == "PLANTULA":
@@ -220,7 +247,6 @@ class PlantBiology:
             self.age_days = 4.0
             self.height_cm = 8.0 * self.vigor_factor
             self.biomass_g = 2.5 * self.vigor_factor
-            self.leaf_area_m2 = 0.01 * self.vigor_factor
             self.flower_induced = False
             self.buds_size = 0.0
             self.trichomes_amber = 0.0
@@ -230,7 +256,6 @@ class PlantBiology:
             self.age_days = 22.0
             self.height_cm = 38.0 * self.vigor_factor
             self.biomass_g = 42.0 * self.vigor_factor
-            self.leaf_area_m2 = 0.35 * self.vigor_factor
             self.flower_induced = False
             self.buds_size = 0.0
             self.trichomes_amber = 0.0
@@ -242,7 +267,6 @@ class PlantBiology:
             self.flower_induction_day = 30.0
             self.height_cm = 72.0 * self.vigor_factor
             self.biomass_g = 105.0 * self.vigor_factor
-            self.leaf_area_m2 = 0.65 * self.vigor_factor
             self.buds_size = 0.45
             self.trichomes_amber = 0.10
             self.root_health = 98.0
@@ -323,12 +347,10 @@ class PlantBiology:
             veg_foliar_mult = 1.25 if not is_generative_steering else 0.85
             self.height_cm += 2.5 * growth_factor * veg_foliar_mult * dt_days
             self.biomass_g += 3.2 * growth_factor * veg_foliar_mult * dt_days
-            self.leaf_area_m2 = min(0.40, self.leaf_area_m2 + 0.018 * growth_factor * dt_days)
         elif self.stage == CropStage.STRETCH:
             stretch_rate = 1.8 if is_generative_steering else 3.8
             self.height_cm += stretch_rate * growth_factor * dt_days
             self.biomass_g += 4.5 * growth_factor * dt_days
-            self.leaf_area_m2 = min(0.70, self.leaf_area_m2 + 0.02 * growth_factor * dt_days)
         elif self.stage == CropStage.FLOWERING:
             self.height_cm += 0.2 * growth_factor * dt_days
             self.biomass_g += 4.2 * growth_factor * dt_days
@@ -422,6 +444,7 @@ class GreenhousePlantPhysics:
         # Contabilidad
         self.total_irrigation_ml = 0.0
         self.total_drain_ml = 0.0
+        self.total_et_ml = 0.0   # transpiración acumulada (diagnóstico)
 
         # La etapa de manejo es una decisión del cultivador (y puede cambiar
         # con un trasplante); no se confunde con la fase fenológica calculada
@@ -608,25 +631,35 @@ class GreenhousePlantPhysics:
                 self.runoff_fase_p3 += runoff_ml
             
         # 4. Transpiración dinámica
-        et_base = (3.2 if is_day else 0.50) * self.biology.vigor_factor * light_exposure
-        stage_mult = 0.18 if self.biology.stage == CropStage.GERMINATION else (0.70 if self.biology.stage == CropStage.VEGETATIVE else 1.15)
+        # La transpiración es proporcional al ÁREA FOLIAR (no a la etapa) y se suma
+        # la evaporación directa del sustrato, que domina en plántulas y desaparece
+        # cuando el dosel cubre la maceta.
         vpd_factor = max(0.2, min(1.6, vpd / 1.1))
-        et_rate = et_base * stage_mult * vpd_factor
+        leaf_m2 = self.biology.leaf_area_m2
+        et_trans = (K_TRANSP_DAY if is_day else K_TRANSP_NIGHT) * leaf_m2 * light_exposure * vpd_factor
+        pot_area_m2 = pot_surface_area_m2(self.pot_ml)
+        canopy_cover = 1.0 - math.exp(-0.5 * leaf_m2 / pot_area_m2)
+        et_evap = ((K_EVAP_DAY if is_day else K_EVAP_NIGHT) * pot_area_m2 * (1.0 - canopy_cover)
+                   * vpd_factor * min(1.0, self.vwc / max(1.0, 0.8 * self.vwc_cc)))
+        et_rate = et_trans + et_evap
         if self.vwc < 25.0:
             et_rate *= max(0.05, (self.vwc - self.vwc_pmp) / 10.0)
-            
+
         et_loss = min(self.W * 0.8, max(0.0, et_rate * dt_min))
+        # Solo el agua transpirada arrastra sales a la planta; la evaporada las deja.
+        trans_loss = et_loss * (et_trans / et_rate) if et_rate > 0.0 else 0.0
         self.W -= et_loss
+        self.total_et_ml += et_loss
         
         # 5. Asimilación fisiológica de nutrientes
         # Las raíces absorben iones del flujo de agua transpirativa (flujo de masa + transporte activo).
         # Típicamente entre 55% y 75% de las sales disueltas en el agua transpirada son asimiladas para
         # síntesis de biomasa celular. El resto se concentra gradualmente en el dryback.
         root_efficiency = max(0.35, min(0.85, 0.65 * (self.biology.root_health / 100.0)))
-        uptake_s = et_loss * self.ec * root_efficiency
+        uptake_s = trans_loss * self.ec * root_efficiency
         self.S = max(0.0, self.S - uptake_s)
-        
-        uptake_fraction = min(0.5, (et_loss / max(self.W, 1.0)) * root_efficiency)
+
+        uptake_fraction = min(0.5, (trans_loss / max(self.W, 1.0)) * root_efficiency)
         self.n_mg = max(0.0, self.n_mg * (1.0 - uptake_fraction))
         self.p_mg = max(0.0, self.p_mg * (1.0 - uptake_fraction * 0.9))
         self.k_mg = max(0.0, self.k_mg * (1.0 - uptake_fraction * 1.1))
@@ -1050,7 +1083,16 @@ class GreenhouseEnvironment:
                     self._cerrar_disparo(p)
                     continue
                 p.disparo_timer_segundos += dt_sim_seconds
-                if p.disparo_timer_segundos >= p.disparo_duracion_total:
+                # Firmware (realizarDisparoP2): el mantenimiento se corta en pleno
+                # riego si el VWC llega al máximo, el runoff de P2 al límite o la
+                # EC al objetivo (esta última queda marcada hasta el próximo P2).
+                corte_p2 = False
+                if p.disparo_fase == "P2":
+                    if p.ec >= cfg.p2_ec_target:
+                        p.p2_ec_objetivo_alcanzado = True
+                    corte_p2 = (p.vwc >= cfg.p2_vwc_max or p.runoff_fase_p2 >= cfg.p2_runoff_max
+                                or p.p2_ec_objetivo_alcanzado)
+                if p.disparo_timer_segundos >= p.disparo_duracion_total or corte_p2:
                     self._cerrar_disparo(p)
                 else:
                     p.valve_cmd = True
@@ -1123,12 +1165,12 @@ class GreenhouseEnvironment:
                         and runoff_ok and ec_objetivo_ok):
                     # vwcPrevisto (EjecucionRiegoP2.cpp): proyección antes del disparo
                     # Si el shot dispararía el sustrato por encima de p2VwcMax, se bloquea.
-                    shot_ml = cfg.p2_vol_cc * (cfg.p2_shot_pc / 100.0)
+                    # VolDisparo incluye el factor VPD antes de proyectar (firmware, l.136-148).
+                    vpd_factor = max(0.75, min(1.25, self.vpd / 1.1))
+                    shot_ml = cfg.p2_vol_cc * (cfg.p2_shot_pc / 100.0) * vpd_factor
                     vwc_previsto = p.vwc + (shot_ml / max(p.pot_ml, 1.0)) * 100.0
                     if vwc_previsto > cfg.p2_vwc_max:
                         continue  # Bloquear: el shot subiría demasiado el VWC
-                    # VPD factor aplica también a P2
-                    vpd_factor = max(0.75, min(1.25, self.vpd / 1.1))
                     duracion_s = cfg.calc_shot_duration_seconds(cfg.p2_shot_pc, cfg.p2_vol_cc) * vpd_factor
                     p.disparo_activo = True
                     p.disparo_timer_segundos = 0.0
@@ -1163,9 +1205,20 @@ class GreenhouseEnvironment:
         self.pump_p1 = any_valve_active_p1 or any(p.cc_test for p in self.plants)
         self.pump_p2 = any_valve_active_p2
 
+    # Un paso grande (velocidades altas, "+1 Día") se subdivide: así una válvula
+    # que abre no entrega minutos de caudal de más y el control (VWC/umbrales,
+    # cierre de disparos) se evalúa con la misma resolución a cualquier velocidad.
+    MAX_SUBSTEP_SECONDS = 5.0
+    MAX_SUBSTEPS = 240
+
     def step(self, dt_real_seconds):
         if self.is_paused: return
-        dt_sim_seconds = dt_real_seconds * self.time_speed
+        dt_total = dt_real_seconds * self.time_speed
+        n = max(1, min(self.MAX_SUBSTEPS, math.ceil(dt_total / self.MAX_SUBSTEP_SECONDS)))
+        for _ in range(n):
+            self._step_sim(dt_total / n)
+
+    def _step_sim(self, dt_sim_seconds):
         prev_day = int(self.sim_time_seconds / 86400.0)
         self.sim_time_seconds += dt_sim_seconds
         new_day = int(self.sim_time_seconds / 86400.0)
@@ -1536,6 +1589,8 @@ class GreenhouseEnvironment:
                 "age_days": round(bio.age_days, 1),
                 "height_cm": round(bio.height_cm, 1),
                 "biomass_g": round(bio.biomass_g, 1),
+                "leaf_area_m2": round(bio.leaf_area_m2, 3),
+                "total_et_ml": round(sel_p.total_et_ml, 0),
                 "root_health_pct": round(bio.root_health, 0),
                 "buds_size_pct": round(bio.buds_size * 100.0, 1),
                 "trichomes_amber_pct": round(bio.trichomes_amber * 100.0, 1),
