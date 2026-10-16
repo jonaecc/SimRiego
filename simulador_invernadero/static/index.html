@@ -56,29 +56,48 @@
                 </div>
                 <div style="display: flex; gap: 8px; align-items: center;">
                     <select id="selectPlant" style="flex: 1; background: #000; color: var(--accent-cyan); border: 1px solid #334155; padding: 6px 10px; border-radius: 6px; font-weight: bold;">
-                        <option value="0">Planta 1 (OG Kush Auto)</option>
+                        <option value="0">Planta 1 (OG Kush)</option>
                         <option value="1">Planta 2 (Gorilla Glue)</option>
                         <option value="2">Planta 3 (Amnesia Haze)</option>
                         <option value="3">Planta 4 (Northern Lights)</option>
-                        <option value="4">Planta 5 (OG Kush Auto)</option>
+                        <option value="4">Planta 5 (OG Kush)</option>
                         <option value="5">Planta 6 (Gorilla Glue)</option>
                         <option value="6">Planta 7 (Amnesia Haze)</option>
                         <option value="7">Planta 8 (Northern Lights)</option>
-                        <option value="8">Planta 9 (OG Kush Auto)</option>
+                        <option value="8">Planta 9 (OG Kush)</option>
                         <option value="9">Planta 10 (Gorilla Glue)</option>
                         <option value="10">Planta 11 (Amnesia Haze)</option>
                         <option value="11">Planta 12 (Northern Lights)</option>
                     </select>
                 </div>
                 <div style="display: flex; gap: 8px; align-items: center; margin-top: 6px;">
-                    <span class="kpi-label">Etapa de manejo:</span>
+                    <span class="kpi-label" title="Salto manual: reinicia la biología de la planta a esa etapa. El avance normal es automático (Plan de cultivo).">Salto manual:</span>
                     <select id="managementStage" style="flex: 1; background: #000; color: var(--accent-green); border: 1px solid #334155; padding: 5px; border-radius: 6px;">
-                        <option value="PLANTULA">Plántula — 0,5 L</option>
-                        <option value="CRECIMIENTO">Crecimiento — 5 L</option>
-                        <option value="FLORACION">Floración — 15 L</option>
+                        <option value="PLANTULA">Plántula</option>
+                        <option value="CRECIMIENTO">Crecimiento</option>
+                        <option value="FLORACION">Floración</option>
                     </select>
                 </div>
-                <button id="btnOpenConfig" class="btn-secondary" style="width: 100%; margin-top: 4px; font-size: 0.78rem;">⚙️ Configurar Riego P1 / P2 / P3</button>
+                <button id="btnOpenConfig" class="btn-secondary" style="width: 100%; margin-top: 4px; font-size: 0.78rem;">⚙️ Configurar Plan de Cultivo y Riego</button>
+            </div>
+
+            <!-- Card: Plan de cultivo (etapas automáticas por días y biomasa) -->
+            <div class="panel-card" id="cropPlanCard" style="border-color: var(--accent-green);">
+                <div class="card-title">
+                    <span>📅 Plan de Cultivo</span>
+                    <span id="planRoomStage" class="status-badge online">PLÁNTULA</span>
+                </div>
+                <div class="kpi-row"><span class="kpi-label">Día de cultivo:</span><span id="planDay" class="kpi-val">1</span></div>
+                <div class="kpi-row"><span class="kpi-label">Etapa / días en etapa:</span><span id="planStageDays" class="kpi-val">—</span></div>
+                <div class="kpi-row"><span class="kpi-label">Siguiente etapa:</span><span id="planNext" class="kpi-val">—</span></div>
+                <div class="slider-label-row"><span>Biomasa vs objetivo</span><span id="planBioTxt">—</span></div>
+                <div style="height: 8px; background: #0e141c; border-radius: 4px; overflow: hidden;">
+                    <div id="planBioBar" style="height: 100%; width: 0%; background: var(--accent-green); transition: width 0.3s;"></div>
+                </div>
+                <div class="slider-label-row" style="margin-top: 4px;"><span>Días mín–máx</span><span id="planDaysTxt">—</span></div>
+                <div class="kpi-row"><span class="kpi-label">Estado:</span><span id="planStatus" class="kpi-val">—</span></div>
+                <div class="kpi-row"><span class="kpi-label">Maceta:</span><span id="planPot" class="kpi-val">—</span></div>
+                <div id="planEvents" class="advisor-box" style="max-height: 110px; overflow-y: auto; font-size: 0.72rem;">Sin transiciones todavía.</div>
             </div>
 
             <!-- Card: Biología del Cultivo -->
@@ -89,7 +108,7 @@
                 </div>
                 <div class="kpi-row">
                     <span class="kpi-label">Variedad:</span>
-                    <span id="cropStrain" class="kpi-val" style="color: var(--accent-cyan);">OG Kush Auto</span>
+                    <span id="cropStrain" class="kpi-val" style="color: var(--accent-cyan);">OG Kush</span>
                 </div>
                 <div class="kpi-row">
                     <span class="kpi-label">Altura:</span>
@@ -309,7 +328,7 @@
             
             <div class="modal-body">
                 <!-- HORARIO GLOBAL (idéntico a ajustes.html) -->
-                <div class="modal-section-title" style="border-color: #ffd600; color: #ffd600;">🕐 HORARIO GLOBAL (aplica a las 12 plantas)</div>
+                <div class="modal-section-title" style="border-color: #ffd600; color: #ffd600;">🕐 HORARIO DE LA SALA PARA LA ETAPA SELECCIONADA (se aplica a las 12 plantas al entrar la sala en esa etapa)</div>
                 <div class="modal-grid">
                     <div class="field-item">
                         <label>LUCES ON [hora] (lucesOnHH)</label>
@@ -358,11 +377,31 @@
                 </div>
 
                 <div id="stageTabContent">
+                    <!-- PLAN DE ETAPA: cuándo se sale de esta etapa -->
+                    <div id="planFields">
+                        <div class="modal-section-title" style="margin-top: 10px; border-color: #ffd600; color: #ffd600;">📅 PLAN DE ETAPA — pasa a la siguiente cuando cumple días mínimos Y biomasa</div>
+                        <div class="modal-grid">
+                            <div class="field-item">
+                                <label>DÍAS MÍNIMOS EN LA ETAPA</label>
+                                <input type="number" step="1" min="0" id="cfg_plan_min_days">
+                            </div>
+                            <div class="field-item">
+                                <label>DÍAS MÁXIMOS (forzado)</label>
+                                <input type="number" step="1" min="0" id="cfg_plan_max_days">
+                            </div>
+                            <div class="field-item">
+                                <label>BIOMASA OBJETIVO [g]</label>
+                                <input type="number" step="1" min="0" id="cfg_plan_biomass">
+                            </div>
+                        </div>
+                        <div class="kpi-label" style="margin-top: 5px;">Si llega a los días máximos sin la biomasa, pasa igual y se marca "forzado". Crecimiento → Floración cambia la sala a su horario (12/12) cuando TODAS las plantas están listas o alguna se fuerza.</div>
+                    </div>
+                    <div id="planFinalNote" class="kpi-label" style="display:none; margin-top: 10px;">Floración es la etapa final del cultivo: no tiene salida automática.</div>
                     <!-- MACETA Y SUSTRATO -->
                     <div class="modal-section-title" style="margin-top: 10px; border-color: var(--accent-green); color: var(--accent-green);">🪴 MACETA & SUSTRATO</div>
                     <div class="modal-grid">
                         <div class="field-item">
-                            <label>VOLUMEN ÚTIL DE SUSTRATO [ml]</label>
+                            <label>VOLUMEN ÚTIL AL ENTRAR EN LA ETAPA [ml] (si es igual al anterior, la maceta se mantiene)</label>
                             <input type="number" step="100" id="cfg_pot_volume_ml">
                         </div>
                         <div class="field-item">

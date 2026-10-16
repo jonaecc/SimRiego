@@ -8,6 +8,7 @@ Integra:
      (config_p1.html, config_p2.html y ajustes.html).
 """
 
+import copy
 import math
 import random
 
@@ -123,10 +124,13 @@ DEFAULT_STAGE_PROFILES = {
         p1_vwc_min=46.0, p1_ec_target=2.8, p1_runoff_max=300.0, p1_vol_cc=3000.0, p1_shot_pc=4.5, p1_tiempo_entre_min=15,
         p2_vwc_min=50.0, p2_vwc_max=57.0, p2_vwc_cc_ref=60.0, p2_ec_target=9.0, p2_runoff_max=450.0, p2_vol_cc=3000.0, p2_shot_pc=2.5, p2_tiempo_entre_min=25, p3_vwc_min=30.0),
     # Floración: maceta de 15 L, dryback más agresivo (generativo), fotoperiodo 12/12
-    "FLORACION": stage_profile(15000.0, 60.0, 15.0, capacidad_bandeja_ml=2000.0,
-        caudal_gotero_lh=3.6, goteros_planta=3,
-        p1_vwc_min=36.0, p1_ec_target=4.2, p1_runoff_max=600.0, p1_vol_cc=9000.0, p1_shot_pc=4.0, p1_tiempo_entre_min=15,
-        p2_vwc_min=40.0, p2_vwc_max=50.0, p2_vwc_cc_ref=60.0, p2_ec_target=9.0, p2_runoff_max=800.0, p2_vol_cc=9000.0, p2_shot_pc=2.0, p2_tiempo_entre_min=30, p3_vwc_min=24.0),
+    # Por defecto la maceta de floración es la misma que la de crecimiento (5 L):
+    # muchos cultivadores no trasplantan al pasar a floración y solo cambian el
+    # riego. Si se configura una maceta mayor, el paso incluye trasplante.
+    "FLORACION": stage_profile(5000.0, 60.0, 15.0, capacidad_bandeja_ml=1200.0,
+        caudal_gotero_lh=3.0, goteros_planta=2,
+        p1_vwc_min=36.0, p1_ec_target=4.2, p1_runoff_max=300.0, p1_vol_cc=3000.0, p1_shot_pc=4.0, p1_tiempo_entre_min=15,
+        p2_vwc_min=40.0, p2_vwc_max=50.0, p2_vwc_cc_ref=60.0, p2_ec_target=9.0, p2_runoff_max=450.0, p2_vol_cc=3000.0, p2_shot_pc=2.0, p2_tiempo_entre_min=30, p3_vwc_min=24.0),
 }
 
 
@@ -157,12 +161,34 @@ STAGE_SUBSTRATE_INIT = {
     "FLORACION": {"vwc": 42.0, "ec": 2.8, "ph": 6.0, "n": 110.0, "p": 75.0, "k": 250.0},
 }
 
+# ---------------------------------------------------------------------------
+# PLAN DE CULTIVO (configurable desde el día 1)
+# ---------------------------------------------------------------------------
+# Cada etapa se abandona cuando la planta cumple a la vez:
+#   - al menos `min_days` días EN la etapa, y
+#   - al menos `biomass_target_g` de biomasa seca.
+# Si llega a `max_days` sin cumplir la biomasa, pasa igual y el evento queda
+# registrado como "forzado". FLORACION es la etapa final (no tiene salida).
+# La maceta de cada etapa vive en su perfil de riego (`pot_volume_ml`): si la
+# maceta de la etapa siguiente es mayor se trasplanta; si es igual, la maceta
+# se mantiene y solo cambia la configuración de riego.
+DEFAULT_CROP_PLAN = {
+    "PLANTULA":    {"min_days": 10.0, "max_days": 21.0, "biomass_target_g": 8.0},
+    "CRECIMIENTO": {"min_days": 21.0, "max_days": 49.0, "biomass_target_g": 80.0},
+    "FLORACION":   {"min_days": 0.0,  "max_days": 0.0,  "biomass_target_g": 0.0},
+}
+NEXT_STAGE = {"PLANTULA": "CRECIMIENTO", "CRECIMIENTO": "FLORACION", "FLORACION": None}
+
 
 class PlantBiology:
     """Modelo biológico individual con fenotipo y respuesta fisiológica."""
-    def __init__(self, plant_id=0, strain_name="OG Kush Auto", vigor_factor=1.0):
+    def __init__(self, plant_id=0, strain_name="OG Kush", vigor_factor=1.0):
         self.id = plant_id
         self.strain_name = strain_name
+        # Un cultivo real no mezcla autoflorecientes con fotoperiódicas. Las 12
+        # plantas son FOTOPERIODICAS: solo florecen cuando la sala pasa a 12/12.
+        # (Más adelante se podrá diferenciar con "AUTOFLORECIENTE".)
+        self.flowering_type = "FOTOPERIODICA"
         self.vigor_factor = vigor_factor   # Variabilidad genética natural (0.85 a 1.20)
         
         self.age_days = 1.0
@@ -229,7 +255,7 @@ class PlantBiology:
         if self.age_days < 10.0:
             self.stage = CropStage.GERMINATION
         else:
-            is_auto = "Auto" in self.strain_name
+            is_auto = (self.flowering_type == "AUTOFLORECIENTE")
             if not self.flower_induced:
                 if photoperiod_hours <= 13.5 or (is_auto and self.age_days >= 28.0):
                     self.flower_induced = True
@@ -331,7 +357,7 @@ class GreenhousePlantPhysics:
         # Variabilidad biológica estocástica
         random.seed(plant_id * 42 + 7)
         vigor = random.uniform(0.88, 1.14)
-        strains = ["OG Kush Auto", "Gorilla Glue", "Amnesia Haze", "Northern Lights"]
+        strains = ["OG Kush", "Gorilla Glue", "Amnesia Haze", "Northern Lights"]
         strain = strains[plant_id % len(strains)]
         self.biology = PlantBiology(plant_id, strain_name=strain, vigor_factor=vigor)
         
@@ -401,6 +427,8 @@ class GreenhousePlantPhysics:
         # con un trasplante); no se confunde con la fase fenológica calculada
         # por edad en PlantBiology.
         self.management_stage = "PLANTULA"
+        # Edad de cultivo (días) en que la planta entró en la etapa de manejo actual.
+        self.stage_start_day = self.biology.age_days
         self.substrate_type = "COCO"
         self.stage_profiles = {key: dict(value) for key, value in DEFAULT_STAGE_PROFILES.items()}
         self._load_stage_profile(self.management_stage, preserve_vwc=False)
@@ -433,11 +461,15 @@ class GreenhousePlantPhysics:
         profile.update({field: getattr(self.config, field) for field in IRRIGATION_FIELDS})
         profile.update({"pot_volume_ml": self.pot_ml, "vwc_cc": self.vwc_cc, "vwc_pmp": self.vwc_pmp})
 
-    def _load_stage_profile(self, stage, preserve_vwc=True):
+    def _load_stage_profile(self, stage, preserve_vwc=True, allow_downsize=True):
         profile = self.stage_profiles[stage]
         old_vwc, old_ec = self.vwc, self.ec
         old_n, old_p, old_k = self.n_ppm, self.p_ppm, self.k_ppm
+        old_pot = self.pot_ml
         self.pot_ml = float(profile["pot_volume_ml"])
+        if not allow_downsize:
+            # Una planta viva nunca pasa a una maceta menor: el volumen se mantiene.
+            self.pot_ml = max(self.pot_ml, old_pot)
         self.vwc_cc = float(profile["vwc_cc"])
         self.vwc_pmp = float(profile["vwc_pmp"])
         for field in IRRIGATION_FIELDS:
@@ -466,7 +498,35 @@ class GreenhousePlantPhysics:
         self.set_substrate(self.substrate_type, preserve_vwc=True)
         if sync_bio:
             self.biology.sync_to_stage(stage)
+        self.stage_start_day = self.biology.age_days
         return True
+
+    @property
+    def stage_days(self):
+        """Días transcurridos dentro de la etapa de manejo actual."""
+        return max(0.0, self.biology.age_days - self.stage_start_day)
+
+    def advance_stage(self, new_stage):
+        """Pasa a la etapa siguiente SIN tocar la biología (la planta sigue viva).
+
+        Cambia el perfil de riego; la maceta solo crece (trasplante) si el perfil
+        nuevo la define mayor, y el agua/sales del sustrato se conservan.
+        """
+        if new_stage not in MANAGEMENT_STAGES or new_stage == self.management_stage:
+            return None
+        old_stage, old_pot = self.management_stage, self.pot_ml
+        self._save_stage_profile()
+        self.management_stage = new_stage
+        self._load_stage_profile(new_stage, preserve_vwc=True, allow_downsize=False)
+        self.set_substrate(self.substrate_type, preserve_vwc=True)
+        transplanted = self.pot_ml > old_pot
+        if transplanted:
+            self.biology.root_health = min(100.0, self.biology.root_health + 20.0)
+        self.stage_start_day = self.biology.age_days
+        # Se guarda el perfil con la maceta real en uso.
+        self._save_stage_profile()
+        return {"from": old_stage, "to": new_stage, "transplant": transplanted,
+                "pot_from_ml": old_pot, "pot_to_ml": self.pot_ml}
 
     def set_substrate(self, substrate_type, preserve_vwc=True):
         if substrate_type not in SUBSTRATE_PROFILES:
@@ -653,6 +713,14 @@ class GreenhouseEnvironment:
         self.history_max = 600
         self.history_timer = 0.0
 
+        # Plan de cultivo orgánico: configurable desde el día 1.
+        self.crop_plan = copy.deepcopy(DEFAULT_CROP_PLAN)
+        self.stage_schedules = copy.deepcopy(STAGE_SCHEDULES)
+        self.stage_solutions = copy.deepcopy(STAGE_NUTRIENT_SOLUTIONS)
+        self.room_stage = "PLANTULA"
+        self.crop_events = []
+        self.apply_stage_environment("PLANTULA")
+
     @property
     def hour_of_day(self):
         return (self.sim_time_seconds / 3600.0) % 24.0
@@ -684,19 +752,21 @@ class GreenhouseEnvironment:
 
     def apply_stage_environment(self, stage):
         """Aplica la receta de nutrientes y horario recomendado para la etapa de manejo."""
-        if stage in STAGE_SCHEDULES:
-            sched = STAGE_SCHEDULES[stage]
-            self.light_on_hour = sched["light_on_hour"]
-            self.light_off_hour = sched["light_off_hour"]
-            self.p1_offset_min = sched["p1_offset_min"]
-            self.p2_inicio_hour = sched["p2_inicio_hour"]
-            self.p2_fin_hour = sched["p2_fin_hour"]
-        if stage in STAGE_NUTRIENT_SOLUTIONS:
-            sols = STAGE_NUTRIENT_SOLUTIONS[stage]
-            self.update_solution("P1", sols["p1"])
-            self.update_solution("P2", sols["p2"])
+        if stage not in MANAGEMENT_STAGES:
+            return
+        self.room_stage = stage
+        sched = self.stage_schedules[stage]
+        self.light_on_hour = sched["light_on_hour"]
+        self.light_off_hour = sched["light_off_hour"]
+        self.p1_offset_min = sched["p1_offset_min"]
+        self.p2_inicio_hour = sched["p2_inicio_hour"]
+        self.p2_fin_hour = sched["p2_fin_hour"]
+        sols = self.stage_solutions[stage]
+        self.update_solution("P1", sols["p1"])
+        self.update_solution("P2", sols["p2"])
 
     def set_management_stage(self, plant_id, stage, update_env=False):
+        """Salto MANUAL de etapa (reinicia la biología). El avance orgánico usa review_crop_plan."""
         if not 0 <= plant_id < len(self.plants):
             return False
         plant = self.plants[plant_id]
@@ -707,6 +777,64 @@ class GreenhouseEnvironment:
         if update_env and res:
             self.apply_stage_environment(stage)
         return res
+
+    # ------------------------------------------------------------------
+    # Plan de cultivo: transiciones automáticas por días y biomasa
+    # ------------------------------------------------------------------
+    def plant_stage_status(self, p):
+        """Estado de la planta frente al plan de su etapa actual (None si es la final)."""
+        nxt = NEXT_STAGE.get(p.management_stage)
+        if nxt is None:
+            return None
+        plan = self.crop_plan[p.management_stage]
+        days, biomass = p.stage_days, p.biology.biomass_g
+        days_ok = days >= plan["min_days"]
+        biomass_ok = biomass >= plan["biomass_target_g"]
+        ready = days_ok and biomass_ok
+        forced = (not ready) and plan["max_days"] > 0 and days >= plan["max_days"]
+        return {"next": nxt, "days": days, "biomass": biomass, "days_ok": days_ok,
+                "biomass_ok": biomass_ok, "ready": ready, "forced": forced, **plan}
+
+    def _log_crop_event(self, p, info, forced, note=""):
+        ev = {"day": int(self.sim_time_seconds / 86400.0) + 1, "plant": p.id,
+              "age_days": round(p.biology.age_days, 1), "biomass_g": round(p.biology.biomass_g, 1),
+              "forced": bool(forced), "note": note, **info}
+        self.crop_events.append(ev)
+        del self.crop_events[:-60]
+        return ev
+
+    def _advance_plant(self, p, new_stage, forced=False, note=""):
+        if p.cc_test:
+            return None
+        self._cerrar_disparo(p)
+        info = p.advance_stage(new_stage)
+        return self._log_crop_event(p, info, forced, note) if info else None
+
+    def review_crop_plan(self):
+        """Revisión diaria. Plántula→Crecimiento es por planta; Crecimiento→Floración
+        es de sala (fotoperiodo único): cuando TODAS están listas, o cuando alguna
+        llega a sus días máximos (forzado)."""
+        events = []
+        for p in self.plants:
+            if p.management_stage == "PLANTULA":
+                st = self.plant_stage_status(p)
+                if st and (st["ready"] or st["forced"]):
+                    ev = self._advance_plant(p, "CRECIMIENTO", forced=st["forced"])
+                    if ev:
+                        events.append(ev)
+        if self.room_stage == "PLANTULA" and not any(p.management_stage == "PLANTULA" for p in self.plants):
+            self.apply_stage_environment("CRECIMIENTO")
+        if self.room_stage == "CRECIMIENTO":
+            grow = [p for p in self.plants if p.management_stage == "CRECIMIENTO"]
+            stats = [self.plant_stage_status(p) for p in grow]
+            if grow and (all(s["ready"] for s in stats) or any(s["forced"] for s in stats)):
+                self.apply_stage_environment("FLORACION")   # 12/12 + receta de floración
+                for p, s in zip(grow, stats):
+                    ev = self._advance_plant(p, "FLORACION", forced=not s["ready"],
+                                             note="cambio de sala a 12/12")
+                    if ev:
+                        events.append(ev)
+        return events
 
     def set_substrate(self, plant_id, substrate_type):
         if not 0 <= plant_id < len(self.plants):
@@ -1054,7 +1182,8 @@ class GreenhouseEnvironment:
                 p.runoff_fase_p2 = 0.0
                 p.runoff_fase_p3 = 0.0
                 p._prev_fase_global = None
-        
+            self.review_crop_plan()
+
         # 1. Ejecutar el controlador de riego automático
         self.execute_automatic_irrigation_logic(dt_sim_seconds)
         
@@ -1219,6 +1348,81 @@ class GreenhouseEnvironment:
         for field, low, high in (("ec", 0.0, 6.0), ("ph", 4.5, 7.5), ("n", 0.0, 400.0), ("p", 0.0, 200.0), ("k", 0.0, 500.0)):
             if field in data:
                 setattr(solution, field, max(low, min(high, float(data[field]))))
+        # Lo editado sobre la receta activa también queda como receta de la etapa de sala.
+        self.stage_solutions[self.room_stage]["p1" if pump == "P1" else "p2"] = solution.as_dict()
+
+    def update_schedule(self, data):
+        """Edita el horario de la etapa activa de la sala y lo guarda en su receta de etapa."""
+        if "p0_minutes" in data: self.p1_offset_min = max(0.0, float(data["p0_minutes"]))
+        if "p2_inicio" in data: self.p2_inicio_hour = float(data["p2_inicio"])
+        if "p2_fin" in data: self.p2_fin_hour = float(data["p2_fin"])
+        if "luces_on" in data: self.light_on_hour = float(data["luces_on"])
+        if "luces_off" in data: self.light_off_hour = float(data["luces_off"])
+        self.stage_schedules[self.room_stage] = {
+            "light_on_hour": self.light_on_hour, "light_off_hour": self.light_off_hour,
+            "p1_offset_min": self.p1_offset_min, "p2_inicio_hour": self.p2_inicio_hour,
+            "p2_fin_hour": self.p2_fin_hour}
+
+    def update_stage_schedule(self, stage, data):
+        """Edita el horario de CUALQUIER etapa (se aplica al entrar la sala en ella)."""
+        if stage not in MANAGEMENT_STAGES:
+            return False
+        if stage == self.room_stage:
+            self.update_schedule(data)
+            return True
+        sched = self.stage_schedules[stage]
+        for key, src, low in (("light_on_hour", "luces_on", 0.0), ("light_off_hour", "luces_off", 0.0),
+                              ("p1_offset_min", "p0_minutes", 0.0), ("p2_inicio_hour", "p2_inicio", 0.0),
+                              ("p2_fin_hour", "p2_fin", 0.0)):
+            if src in data:
+                sched[key] = max(low, float(data[src]))
+        return True
+
+    def update_crop_plan(self, stage, min_days=None, max_days=None, biomass_target_g=None):
+        """Configura cuándo se abandona una etapa. Valida max >= min >= 0 y biomasa >= 0."""
+        if stage not in MANAGEMENT_STAGES or NEXT_STAGE[stage] is None:
+            return False
+        plan = self.crop_plan[stage]
+        new_min = plan["min_days"] if min_days is None else float(min_days)
+        new_max = plan["max_days"] if max_days is None else float(max_days)
+        new_bio = plan["biomass_target_g"] if biomass_target_g is None else float(biomass_target_g)
+        if new_min < 0 or new_bio < 0 or new_max < new_min:
+            return False
+        plan.update({"min_days": new_min, "max_days": new_max, "biomass_target_g": new_bio})
+        return True
+
+    def update_stage_profile(self, plant_id, stage, cfg_data):
+        """Edita el perfil de riego guardado de una etapa sin activarla."""
+        if not 0 <= plant_id < len(self.plants) or stage not in MANAGEMENT_STAGES:
+            return False
+        p = self.plants[plant_id]
+        if stage == p.management_stage:
+            self.update_plant_config(plant_id, cfg_data)
+            return True
+        prof = p.stage_profiles[stage]
+        for key, val in cfg_data.items():
+            if key in prof:
+                prof[key] = type(prof[key])(float(val)) if isinstance(prof[key], (int, float)) else val
+        return True
+
+    def _crop_focus(self, p):
+        """Bloque 'plan de cultivo' de la planta enfocada para la UI."""
+        st = self.plant_stage_status(p)
+        out = {"stage": p.management_stage, "day": round(p.biology.age_days, 1),
+               "stage_days": round(p.stage_days, 1), "flowering_type": p.biology.flowering_type,
+               "biomass_g": round(p.biology.biomass_g, 1), "room_stage": self.room_stage,
+               "next_stage": None}
+        if st:
+            nxt_pot = float(p.stage_profiles[st["next"]]["pot_volume_ml"])
+            will_transplant = nxt_pot > p.pot_ml
+            waiting_for_room = (p.management_stage == "CRECIMIENTO" and st["ready"])
+            out.update({"next_stage": st["next"], "min_days": st["min_days"], "max_days": st["max_days"],
+                        "biomass_target_g": st["biomass_target_g"], "days_ok": st["days_ok"],
+                        "biomass_ok": st["biomass_ok"], "ready": st["ready"], "forced": st["forced"],
+                        "will_transplant": will_transplant,
+                        "pot_next_ml": max(nxt_pot, p.pot_ml),
+                        "waiting_for_room": waiting_for_room})
+        return out
 
     def dump_state(self):
         """Exporta el estado completo de las 12 plantas y el foco actual."""
@@ -1233,7 +1437,13 @@ class GreenhouseEnvironment:
         # Resumen de las 12 plantas para el selector y la mesa 3D
         plants_summary = []
         for p in self.plants:
+            st = self.plant_stage_status(p)
             plants_summary.append({
+                "stage_days": round(p.stage_days, 1),
+                "biomass_g": round(p.biology.biomass_g, 1),
+                "crop_ready": bool(st and st["ready"]),
+                "crop_forced": bool(st and st["forced"]),
+                "pot_volume_ml": p.pot_ml,
                 "id": p.id,
                 "strain": p.biology.strain_name,
                 "stage": p.biology.stage,
@@ -1291,6 +1501,10 @@ class GreenhouseEnvironment:
                 "valve_feedback_0": sel_p.valve_feedback
             },
             "selected_plant_id": self.selected_plant_id,
+            "crop_plan": copy.deepcopy(self.crop_plan),
+            "room_stage": self.room_stage,
+            "stage_schedules": copy.deepcopy(self.stage_schedules),
+            "crop_events": list(self.crop_events[-20:]),
             "plants_all": plants_summary,
             "plant_focus": {
                 "id": sel_p.id,
@@ -1344,6 +1558,7 @@ class GreenhouseEnvironment:
                     "stem_purple": round(bio.stem_purple, 2)
                 },
                 "stage_profiles": {k: dict(v) for k, v in sel_p.stage_profiles.items()},
+                "crop": self._crop_focus(sel_p),
                 # Configuración activa de esta planta
                 "config": {
                     "caudal_gotero_lh": cfg.caudal_gotero_lh,
