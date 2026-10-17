@@ -1,16 +1,16 @@
 """Pruebas de regresión del gemelo digital (sin navegador ni hardware)."""
 import unittest
 
-from physics_engine import GreenhouseEnvironment
+from physics_engine import GreenhouseEnvironment, NutrientSolution
 
 
 class InitialStateTests(unittest.TestCase):
-    def test_day_one_starts_at_lights_on_with_30_percent_vwc(self):
+    def test_day_one_starts_at_lights_on_with_20_percent_vwc(self):
         env = GreenhouseEnvironment()
         self.assertAlmostEqual(env.sim_time_seconds, 6 * 3600.0)
         for p in env.plants:
-            self.assertAlmostEqual(p.vwc, 30.0, delta=0.5)
-            self.assertAlmostEqual(p.vwc_mean, 30.0, delta=0.5)
+            self.assertAlmostEqual(p.vwc, 20.0, delta=0.5)
+            self.assertAlmostEqual(p.vwc_mean, 20.0, delta=0.5)
 
 
 class AutomaticIrrigationTests(unittest.TestCase):
@@ -447,3 +447,31 @@ class CropPlanTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SaltTransportTests(unittest.TestCase):
+    def test_input_ec_up_to_15_is_accepted(self):
+        env = GreenhouseEnvironment()
+        env.update_solution("P2", {"ec": 10.0})
+        self.assertEqual(env.solution_p2.ec, 10.0)
+
+    def test_sensor_ec_rises_with_a_strong_shot_and_follows_the_top_layer(self):
+        env = GreenhouseEnvironment()
+        p = env.plants[0]
+        ec0 = p.ec
+        sol = NutrientSolution(ec=10.0, ph=6.0, n=100.0, p=50.0, k=150.0)
+        p.valve_cmd = p.valve_open = True
+        for _ in range(60):
+            p.step(10.0, True, 1.1, 25.0, True, sol, 1.0)
+        self.assertGreater(p.ec, ec0 + 1.0)
+        self.assertGreater(p.ec, p.ec_bottom)   # el sensor ve más EC que la capa inferior
+
+    def test_total_salt_is_conserved_without_drain_or_uptake(self):
+        env = GreenhouseEnvironment()
+        p = env.plants[0]
+        p.W_t, p.W_b = 0.9 * p.vol_top_ml * p.vwc_cc / 100, 0.2 * p.vol_bottom_ml * p.vwc_cc / 100
+        p.S_t, p.S_b = 5000.0, 1000.0
+        s0 = p.S
+        p.biology.biomass_g = 0.1
+        p.step(600.0, False, 0.2, 20.0, False, env.solution_p2, 0.0)
+        self.assertAlmostEqual(p.S, s0, delta=s0 * 0.02)
