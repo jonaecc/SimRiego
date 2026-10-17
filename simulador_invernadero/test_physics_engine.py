@@ -208,7 +208,7 @@ class AutomaticIrrigationTests(unittest.TestCase):
             shots += act and not was
             was = act
             vwc_max = max(vwc_max, self.plant.vwc)
-        self.assertGreater(shots, 10, "debe apilar muchos disparos, no uno por descenso al piso")
+        self.assertGreater(shots, 3, "debe apilar varios disparos, no uno por descenso al piso")
         self.assertGreater(vwc_max, 55.0, "debe subir hacia el máximo configurado")
         self.assertLessEqual(vwc_max, 59.5, "no debe pasarse del máximo (corte en pleno riego)")
 
@@ -291,6 +291,55 @@ class EvapotranspirationTests(unittest.TestCase):
         expected = p.config.flow_ml_min * p.dripper_variance * 2.0
         for v in volumes:
             self.assertAlmostEqual(v, expected, delta=0.08 * expected)
+
+
+class TwoLayerPotTests(unittest.TestCase):
+    def setUp(self):
+        self.env = GreenhouseEnvironment()
+        self.p = self.env.plants[0]
+        self.env.update_plant_config(0, {"pot_volume_ml": 5000})
+        self.sol = self.env.solution_p1
+
+    def _run(self, minutes, is_day=True):
+        for _ in range(int(minutes * 12)):
+            self.p.step(5.0, is_day, 1.1, 25.0, False, self.sol, 1.0)
+
+    def test_sensor_peak_after_irrigation_settles_as_water_moves_down(self):
+        p = self.p
+        p.W_t = p.vol_top_ml * 0.66
+        p.W_b = p.vol_bottom_ml * 0.40
+        top0, bot0 = p.vwc, p.vwc_bottom
+        self._run(60, is_day=False)
+        self.assertLess(p.vwc, top0 - 3.0, "el sensor debe caer tras el pico por redistribución")
+        self.assertGreater(p.vwc_bottom, bot0 + 3.0, "la capa inferior debe ganar el agua que baja")
+
+    def test_no_tray_runoff_until_the_bottom_layer_is_saturated(self):
+        p = self.p
+        p.W_t = p.vol_top_ml * 0.66
+        p.W_b = p.vol_bottom_ml * 0.30
+        self._run(30, is_day=False)
+        self.assertEqual(p.tray_ml, 0.0)
+
+    def test_saturated_pot_drains_to_the_tray(self):
+        p = self.p
+        p.W_t = p.vol_top_ml * 0.66
+        p.W_b = p.vol_bottom_ml * 0.70
+        self._run(60, is_day=False)
+        self.assertGreater(p.tray_ml, 0.0)
+
+    def test_top_dries_faster_than_bottom_under_light(self):
+        p = self.p
+        p.biology.biomass_g = 60.0
+        p.W = p.pot_ml * 0.52
+        self._run(180)
+        self.assertLess(p.vwc, p.vwc_bottom - 0.5)
+
+    def test_setting_total_water_keeps_both_layers_consistent(self):
+        p = self.p
+        p.W = p.pot_ml * 0.30
+        self.assertAlmostEqual(p.vwc, 30.0, places=3)
+        self.assertAlmostEqual(p.vwc_bottom, 30.0, places=3)
+        self.assertAlmostEqual(p.vwc_mean, 30.0, places=3)
 
 
 class CropPlanTests(unittest.TestCase):

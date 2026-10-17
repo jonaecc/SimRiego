@@ -117,20 +117,20 @@ DEFAULT_STAGE_PROFILES = {
     "PLANTULA": stage_profile(500.0, 60.0, 15.0, capacidad_bandeja_ml=300.0,
         caudal_gotero_lh=1.8, goteros_planta=1,
         p1_vwc_min=38.0, p1_ec_target=1.4, p1_runoff_max=40.0, p1_vol_cc=300.0, p1_shot_pc=4.0, p1_tiempo_entre_min=15,
-        p2_vwc_min=40.0, p2_vwc_max=52.0, p2_vwc_cc_ref=60.0, p2_ec_target=9.0, p2_runoff_max=100.0, p2_vol_cc=300.0, p2_shot_pc=5.0, p2_tiempo_entre_min=20, p3_vwc_min=25.0),
+        p2_vwc_min=44.0, p2_vwc_max=50.0, p2_vwc_cc_ref=60.0, p2_ec_target=9.0, p2_runoff_max=100.0, p2_vol_cc=300.0, p2_shot_pc=4.0, p2_tiempo_entre_min=20, p3_vwc_min=25.0),
     # Crecimiento: maceta de 5 L, goteros dobles, dryback diurno moderado (Vegetativo)
     "CRECIMIENTO": stage_profile(5000.0, 60.0, 15.0, capacidad_bandeja_ml=1200.0,
         caudal_gotero_lh=3.0, goteros_planta=2,
         p1_vwc_min=46.0, p1_ec_target=2.8, p1_runoff_max=300.0, p1_vol_cc=3000.0, p1_shot_pc=4.5, p1_tiempo_entre_min=15,
-        p2_vwc_min=50.0, p2_vwc_max=57.0, p2_vwc_cc_ref=60.0, p2_ec_target=9.0, p2_runoff_max=450.0, p2_vol_cc=3000.0, p2_shot_pc=2.5, p2_tiempo_entre_min=25, p3_vwc_min=30.0),
+        p2_vwc_min=54.0, p2_vwc_max=57.0, p2_vwc_cc_ref=60.0, p2_ec_target=9.0, p2_runoff_max=450.0, p2_vol_cc=3000.0, p2_shot_pc=1.5, p2_tiempo_entre_min=25, p3_vwc_min=30.0),
     # Floración: maceta de 15 L, dryback más agresivo (generativo), fotoperiodo 12/12
     # Con la transpiración realista una planta madura consume ~2.8 L/día: una maceta
     # de 5 L se seca hasta ~15% VWC, así que el trasplante a 15 L ocurre al pasar a
     # floración. Si se configura una maceta igual o menor, se conserva la actual.
     "FLORACION": stage_profile(15000.0, 60.0, 15.0, capacidad_bandeja_ml=2400.0,
         caudal_gotero_lh=3.0, goteros_planta=2,
-        p1_vwc_min=36.0, p1_ec_target=4.2, p1_runoff_max=300.0, p1_vol_cc=3000.0, p1_shot_pc=4.0, p1_tiempo_entre_min=15,
-        p2_vwc_min=40.0, p2_vwc_max=50.0, p2_vwc_cc_ref=60.0, p2_ec_target=9.0, p2_runoff_max=450.0, p2_vol_cc=3000.0, p2_shot_pc=2.0, p2_tiempo_entre_min=20, p3_vwc_min=24.0),
+        p1_vwc_min=44.0, p1_ec_target=5.0, p1_runoff_max=900.0, p1_vol_cc=9000.0, p1_shot_pc=4.0, p1_tiempo_entre_min=15,
+        p2_vwc_min=51.0, p2_vwc_max=54.0, p2_vwc_cc_ref=60.0, p2_ec_target=9.0, p2_runoff_max=1350.0, p2_vol_cc=9000.0, p2_shot_pc=1.5, p2_tiempo_entre_min=15, p3_vwc_min=24.0),
 }
 
 
@@ -192,6 +192,16 @@ K_EVAP_DAY = 1.85
 K_EVAP_NIGHT = 0.55
 
 
+# ── Maceta de dos capas ─────────────────────────────────────────────────────
+# El sensor de VWC mide la capa superior (zona de goteo y de máxima extracción);
+# el agua que supera su capacidad se redistribuye por gravedad a la capa inferior,
+# que retiene más agua (nivel colgante) y es la que drena a la bandeja.
+TOP_FRACTION = 0.5          # fracción del volumen de maceta que ve el sensor
+ROOT_WEIGHT_TOP = 0.6       # fracción de la transpiración extraída de la capa superior
+FC_STRATIFICATION = 0.06    # superior retiene (1-g)·CC, inferior (1+g)·CC
+TAU_REDIST_MIN = 30.0       # constante de tiempo de redistribución gravitacional [min]
+K_EXCH = 0.01               # intercambio capilar entre capas hacia el equilibrio [1/min] (τ≈100 min)
+
 def pot_surface_area_m2(pot_ml):
     """Superficie libre de una maceta cilíndrica de altura ≈1,2 × diámetro."""
     d_cm = (max(pot_ml, 50.0) / 0.942) ** (1.0 / 3.0)
@@ -234,11 +244,12 @@ class PlantBiology:
     def leaf_area_m2(self):
         """Área foliar [m²] (alometría): crece de forma continua con la biomasa.
 
-        LA = 0.00265 · B^1.177 (≈0.006 m² a 2 g, 0.05 a 12 g, 0.37 a 67 g, 1.7 a 238 g),
+        LA = 0.009 · B^0.95 (≈0.02 m² a 2 g, 0.18 a 24 g, 0.58 a 80 g, 2.0 a 300 g;
+        ≈0.008 m²/g en vegetativo, coherente con ~8-10 m²/kg de planta),
         con tope por autosombreado. Reemplaza los valores escalón anteriores y es la
         base de la transpiración: la planta transpira según su tamaño, no según la etapa.
         """
-        return min(2.2, 0.00265 * max(self.biomass_g, 0.1) ** 1.177)
+        return min(2.2, 0.009 * max(self.biomass_g, 0.1) ** 0.95)
 
     def sync_to_stage(self, stage):
         """Sincroniza la morfología base (solo para resets o inicialización explícita)."""
@@ -391,6 +402,7 @@ class GreenhousePlantPhysics:
         self.pot_ml = 3500.0
         self.vwc_cc = 46.0 * random.uniform(0.97, 1.03)
         self.vwc_pmp = 15.0
+        self.W_t = self.W_b = 0.0
         self.W = 0.38 * self.pot_ml
         self.S = 2.4 * self.W
         self.ph = 5.9
@@ -458,7 +470,35 @@ class GreenhousePlantPhysics:
         self.set_substrate(self.substrate_type, preserve_vwc=False)
 
     @property
-    def vwc(self): return 100.0 * self.W / self.pot_ml
+    def W(self): return self.W_t + self.W_b
+    @W.setter
+    def W(self, value):
+        """Asignar el agua total conserva el gradiente actual entre capas."""
+        value = max(0.0, value)
+        total = self.W_t + self.W_b
+        if total > 1e-9:
+            k = value / total
+            self.W_t *= k
+            self.W_b *= k
+        else:
+            self.W_t = value * TOP_FRACTION
+            self.W_b = value * (1.0 - TOP_FRACTION)
+    @property
+    def vol_top_ml(self): return self.pot_ml * TOP_FRACTION
+    @property
+    def vol_bottom_ml(self): return self.pot_ml * (1.0 - TOP_FRACTION)
+    @property
+    def vwc(self):
+        """Lectura del sensor: capa superior."""
+        return 100.0 * self.W_t / max(self.vol_top_ml, 1.0)
+    @property
+    def vwc_bottom(self): return 100.0 * self.W_b / max(self.vol_bottom_ml, 1.0)
+    @property
+    def vwc_mean(self): return 100.0 * self.W / self.pot_ml
+    @property
+    def vwc_root(self):
+        """VWC que percibe la raíz (promedio ponderado por extracción)."""
+        return ROOT_WEIGHT_TOP * self.vwc + (1.0 - ROOT_WEIGHT_TOP) * self.vwc_bottom
     @property
     def ec(self): return self.S / max(self.W, 1.0)
     @property
@@ -590,7 +630,7 @@ class GreenhousePlantPhysics:
             inflow_rate = self.config.flow_ml_min * self.dripper_variance
             inflow_ml = inflow_rate * dt_min
             water_before = self.W
-            self.W += inflow_ml
+            self.W_t += inflow_ml   # el goteo moja la capa superior
             self.S += inflow_ml * solution.ec
             self.ph = (self.ph * water_before + solution.ph * inflow_ml) / max(self.W, 1.0)
             self.n_mg += inflow_ml * solution.n / 1000.0
@@ -598,14 +638,33 @@ class GreenhousePlantPhysics:
             self.k_mg += inflow_ml * solution.k / 1000.0
             self.total_irrigation_ml += inflow_ml
             
-        # 3. Drenaje / Escorrentía
+        # 3. Redistribución, capilaridad y drenaje
+        fc_t = self.vwc_cc * (1.0 - FC_STRATIFICATION) / 100.0 * self.vol_top_ml
+        fc_b = self.vwc_cc * (1.0 + FC_STRATIFICATION) / 100.0 * self.vol_bottom_ml
+        # Gravedad: lo que excede la capacidad de la capa superior baja a la inferior.
+        ex_t = self.W_t - fc_t
+        if ex_t > 0.0:
+            moved = ex_t * (1.0 - math.exp(-dt_min / TAU_REDIST_MIN))
+            self.W_t -= moved
+            self.W_b += moved
+        # Capilaridad: el agua se mueve hacia la capa relativamente más seca, en ambos
+        # sentidos. Tras cada disparo el sensor baja mientras la capa inferior sube,
+        # y la inferior se repone desde arriba en vez de quedar como volumen muerto.
+        s_t, s_b = self.W_t / max(fc_t, 1.0), self.W_b / max(fc_b, 1.0)
+        m = fc_t * fc_b / max(fc_t + fc_b, 1.0)
+        flux = K_EXCH * (s_t - s_b) * m * dt_min
+        flux = max(-0.5 * abs(s_t - s_b) * m, min(0.5 * abs(s_t - s_b) * m, flux))
+        flux = max(-self.W_b * 0.5, min(self.W_t * 0.5, flux))
+        self.W_t -= flux
+        self.W_b += flux
+        # Drenaje a bandeja: solo la capa inferior saturada drena.
         runoff_ml = 0.0
-        if self.W > self.W_cc:
-            excess = self.W - self.W_cc
+        if self.W_b > fc_b:
+            excess = self.W_b - fc_b
             drain = min(excess, (self.drain_rate_max * dt_min) * (excess / (self.pot_ml * 0.15)))
             drain = min(drain, excess)
             runoff_ml = drain
-            self.W -= runoff_ml
+            self.W_b -= runoff_ml
             sales_drained = runoff_ml * self.ec
             self.S = max(0.0, self.S - sales_drained)
             fraction = runoff_ml / max(self.W + runoff_ml, 1.0)
@@ -642,13 +701,30 @@ class GreenhousePlantPhysics:
         et_evap = ((K_EVAP_DAY if is_day else K_EVAP_NIGHT) * pot_area_m2 * (1.0 - canopy_cover)
                    * vpd_factor * min(1.0, self.vwc / max(1.0, 0.8 * self.vwc_cc)))
         et_rate = et_trans + et_evap
-        if self.vwc < 25.0:
-            et_rate *= max(0.05, (self.vwc - self.vwc_pmp) / 10.0)
+        vwc_root = self.vwc_root
+        if vwc_root < 25.0:
+            et_rate *= max(0.05, (vwc_root - self.vwc_pmp) / 10.0)
 
         et_loss = min(self.W * 0.8, max(0.0, et_rate * dt_min))
         # Solo el agua transpirada arrastra sales a la planta; la evaporada las deja.
         trans_loss = et_loss * (et_trans / et_rate) if et_rate > 0.0 else 0.0
-        self.W -= et_loss
+        # La evaporación sale solo de la capa superior; la transpiración se reparte
+        # entre capas según la distribución radicular. Una capa no baja del PMP:
+        # si se agota, la raíz toma el resto de la otra capa.
+        evap_ml = et_loss - trans_loss
+        pmp_t = self.vwc_pmp / 100.0 * self.vol_top_ml
+        pmp_b = self.vwc_pmp / 100.0 * self.vol_bottom_ml
+        take_t = min(max(0.0, self.W_t - pmp_t), evap_ml + trans_loss * ROOT_WEIGHT_TOP)
+        take_b = min(max(0.0, self.W_b - pmp_b), trans_loss * (1.0 - ROOT_WEIGHT_TOP))
+        short = et_loss - take_t - take_b
+        if short > 1e-9:
+            extra_b = min(max(0.0, self.W_b - pmp_b - take_b), short)
+            take_b += extra_b
+            short -= extra_b
+            take_t += min(max(0.0, self.W_t - pmp_t - take_t), short)
+        self.W_t -= take_t
+        self.W_b -= take_b
+        et_loss = take_t + take_b
         self.total_et_ml += et_loss
         
         # 5. Asimilación fisiológica de nutrientes
@@ -666,7 +742,7 @@ class GreenhousePlantPhysics:
         
         # 6. Biología
         self.biology.update_growth(
-            dt_hours, self.vwc, self.ec, self.ph,
+            dt_hours, self.vwc_root, self.ec, self.ph,
             self.n_ppm, self.p_ppm, self.k_ppm,
             vpd, temp, light_exposure,
             pot_ml=self.pot_ml,
@@ -1173,7 +1249,7 @@ class GreenhouseEnvironment:
                     # VolDisparo incluye el factor VPD antes de proyectar (firmware, l.136-148).
                     vpd_factor = max(0.75, min(1.25, self.vpd / 1.1))
                     shot_ml = cfg.p2_vol_cc * (cfg.p2_shot_pc / 100.0) * vpd_factor
-                    vwc_previsto = p.vwc + (shot_ml / max(p.pot_ml, 1.0)) * 100.0
+                    vwc_previsto = p.vwc + (shot_ml / max(p.vol_top_ml, 1.0)) * 100.0
                     if vwc_previsto > cfg.p2_vwc_max:
                         continue  # Bloquear: el shot subiría demasiado el VWC
                     duracion_s = cfg.calc_shot_duration_seconds(cfg.p2_shot_pc, cfg.p2_vol_cc) * vpd_factor
@@ -1571,6 +1647,8 @@ class GreenhouseEnvironment:
                 "substrate_type": sel_p.substrate_type,
                 "substrate_label": SUBSTRATE_PROFILES[sel_p.substrate_type]["label"],
                 "vwc": round(sel_p.vwc, 1),
+                "vwc_bottom": round(sel_p.vwc_bottom, 1),
+                "vwc_mean": round(sel_p.vwc_mean, 1),
                 "ec": round(sel_p.ec, 2),
                 "ph": round(sel_p.ph, 2),
                 "npk_ppm": {"n": round(sel_p.n_ppm, 0), "p": round(sel_p.p_ppm, 0), "k": round(sel_p.k_ppm, 0)},
