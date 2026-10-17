@@ -1,7 +1,7 @@
 """Pruebas de regresión del gemelo digital (sin navegador ni hardware)."""
 import unittest
 
-from physics_engine import GreenhouseEnvironment, FLOWER_REGIMES, STAGE_NUTRIENT_SOLUTIONS
+from physics_engine import GreenhouseEnvironment
 
 
 class InitialStateTests(unittest.TestCase):
@@ -104,8 +104,8 @@ class AutomaticIrrigationTests(unittest.TestCase):
         self.env.set_auto_tray_service(True)
         self.plant.tray_ml = 350.0
         self.plant.tray_tare_ml = 0.0
-        self.env.sim_time_seconds = (self.env.p2_fin_hour - 0.01) * 3600
-        self.env.step(1.0)  # cruza el fin de P2
+        self.env.sim_time_seconds = 19.99 * 3600
+        self.env.step(1.0)  # cruza las 20:00, fin de P2
         self.assertEqual(self.plant.tray_ml, 0.0)
         self.assertEqual(self.plant.tray_tare_ml, 0.0)
         self.assertFalse(self.plant.tare_with_water)
@@ -168,7 +168,7 @@ class AutomaticIrrigationTests(unittest.TestCase):
         self.assertTrue(self.plant.disparo_activo)
 
     def test_pumps_deliver_their_own_recipe(self):
-        self.env.update_solution("P1", {"ec": 0.6, "ph": 5.5, "n": 90, "p": 30, "k": 120})
+        self.env.update_solution("P1", {"ec": 1.1, "ph": 5.5, "n": 90, "p": 30, "k": 120})
         self.env.update_solution("P2", {"ec": 3.0, "ph": 6.3, "n": 180, "p": 70, "k": 280})
 
         self.env.trigger_shot(0, duration_seconds=120.0)  # Manual = Bomba P1, como firmware
@@ -446,31 +446,3 @@ class CropPlanTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class AdvisorAndRegimeTests(unittest.TestCase):
-    def test_advisor_reports_ec_lockout_and_ok_state(self):
-        env = GreenhouseEnvironment()
-        p = env.plants[0]
-        base = env.agronomic_advisor(p)
-        self.assertTrue(all({"level", "code", "message"} <= set(a) for a in base))
-        p.S = 12.0 * p.W
-        codes = [a["code"] for a in env.agronomic_advisor(p)]
-        self.assertIn("pore_ec_critical", codes)
-
-    def test_advisor_drain_ec_rule(self):
-        env = GreenhouseEnvironment()
-        p = env.plants[0]
-        p.last_day_stats = {"drain_ec": 9.0, "runoff_pct": 10.0, "irrigation_ml": 100.0, "dryback_pts": 10.0}
-        codes = [a["code"] for a in env.agronomic_advisor(p)]
-        self.assertTrue({"drain_ec_high", "drain_ec_rising"} & set(codes))
-
-    def test_flower_regimes_have_wash_p1_weaker_than_p2(self):
-        for r in FLOWER_REGIMES:
-            self.assertLess(r["solutions"]["p1"]["ec"], r["solutions"]["p2"]["ec"])
-        for stage, sol in STAGE_NUTRIENT_SOLUTIONS.items():
-            self.assertLess(sol["p1"]["ec"], sol["p2"]["ec"] + 1e-9, stage)
-
-    def test_advisor_exported_in_dump_state(self):
-        env = GreenhouseEnvironment()
-        self.assertIsInstance(env.dump_state()["advisor"], list)

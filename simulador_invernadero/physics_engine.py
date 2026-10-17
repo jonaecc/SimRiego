@@ -110,94 +110,55 @@ def stage_profile(pot_ml, vwc_cc, vwc_pmp, **irrigation):
     }
 
 
-# ── Estrategia por etapa (crop steering) ────────────────────────────────────
-# Cada etapa se diseña a partir de su OBJETIVO (vegetativo o generativo). Las
-# magnitudes salen de las guías de FloraFlex, Grodan, Hydrobuilder y Aroya:
-#   · disparo = % del volumen de sustrato (vol_cc = 0,6 × maceta → shot_pc = % / 0,6)
-#   · inicio de P1 y último riego antes del apagado fijan el dryback nocturno
-#   · P1 es riego de LAVADO (EC baja, genera runoff y repone la raíz) y P2 es la
-#     ALIMENTACIÓN que mantiene (o deja subir) la EC del sustrato.
-#   · vegetativo: P2 activo (un pulso por cada caída de 2-4 puntos), runoff 15-25 %,
-#     dryback 10-15 %. generativo: P2 mínimo (solo piso de seguridad), runoff 0-10 %,
-#     dryback 20-35 %, EC del sustrato en ascenso.
-# Soluciones: Jack's 3-2-1 (EC por etapa y ppm de N de la guía de Growlink; P y K
-# calculados desde la etiqueta). Para P1 se diluye la misma receta.
 DEFAULT_STAGE_PROFILES = {
-    # Plántula (Clone 15-6-17, EC 1,1): maceta de 0,5 L, runoff mínimo, dryback suave
+    # Plántula: maceta de 0.5 L, goteros pequeños, dryback suave para no estresar semillas
+    # p1: sube desde el dryback nocturno hasta CC cada mañana con shots pequeños
+    # p2: mantiene VWC entre 40-50% (por encima del PMP=15%) con shots pequeños y frecuentes
     "PLANTULA": stage_profile(500.0, 60.0, 15.0, capacidad_bandeja_ml=300.0,
         caudal_gotero_lh=1.8, goteros_planta=1,
-        p1_vwc_min=38.0, p1_ec_target=1.6, p1_runoff_max=40.0, p1_vol_cc=300.0, p1_shot_pc=4.0, p1_tiempo_entre_min=15,
-        p2_vwc_min=44.0, p2_vwc_max=50.0, p2_vwc_cc_ref=60.0, p2_ec_target=3.0, p2_runoff_max=100.0, p2_vol_cc=300.0, p2_shot_pc=4.0, p2_tiempo_entre_min=20, p3_vwc_min=25.0),
-    # Crecimiento (VEGETATIVO): maceta 5 L, P1 de 2,5 % con runoff ~15-25 %,
-    # P2 de 1,5 % cada vez que cae 3 puntos, último riego 2 h antes de apagar.
+        p1_vwc_min=38.0, p1_ec_target=1.4, p1_runoff_max=40.0, p1_vol_cc=300.0, p1_shot_pc=4.0, p1_tiempo_entre_min=15,
+        p2_vwc_min=44.0, p2_vwc_max=50.0, p2_vwc_cc_ref=60.0, p2_ec_target=9.0, p2_runoff_max=100.0, p2_vol_cc=300.0, p2_shot_pc=4.0, p2_tiempo_entre_min=20, p3_vwc_min=25.0),
+    # Crecimiento: maceta de 5 L, goteros dobles, dryback diurno moderado (Vegetativo)
     "CRECIMIENTO": stage_profile(5000.0, 60.0, 15.0, capacidad_bandeja_ml=1200.0,
         caudal_gotero_lh=3.0, goteros_planta=2,
-        p1_vwc_min=52.0, p1_ec_target=3.4, p1_runoff_max=170.0, p1_vol_cc=3000.0, p1_shot_pc=4.2, p1_tiempo_entre_min=15,
-        p2_vwc_min=56.0, p2_vwc_max=59.0, p2_vwc_cc_ref=60.0, p2_ec_target=4.5, p2_runoff_max=450.0, p2_vol_cc=3000.0, p2_shot_pc=2.5, p2_tiempo_entre_min=20, p3_vwc_min=35.0),
+        p1_vwc_min=46.0, p1_ec_target=2.8, p1_runoff_max=300.0, p1_vol_cc=3000.0, p1_shot_pc=4.5, p1_tiempo_entre_min=15,
+        p2_vwc_min=54.0, p2_vwc_max=57.0, p2_vwc_cc_ref=60.0, p2_ec_target=9.0, p2_runoff_max=450.0, p2_vol_cc=3000.0, p2_shot_pc=1.5, p2_tiempo_entre_min=25, p3_vwc_min=30.0),
+    # Floración: maceta de 15 L, dryback más agresivo (generativo), fotoperiodo 12/12
+    # Con la transpiración realista una planta madura consume ~2.8 L/día: una maceta
+    # de 5 L se seca hasta ~15% VWC, así que el trasplante a 15 L ocurre al pasar a
+    # floración. Si se configura una maceta igual o menor, se conserva la actual.
+    "FLORACION": stage_profile(15000.0, 60.0, 15.0, capacidad_bandeja_ml=2400.0,
+        caudal_gotero_lh=3.0, goteros_planta=2,
+        p1_vwc_min=44.0, p1_ec_target=5.0, p1_runoff_max=900.0, p1_vol_cc=9000.0, p1_shot_pc=4.0, p1_tiempo_entre_min=15,
+        p2_vwc_min=51.0, p2_vwc_max=54.0, p2_vwc_cc_ref=60.0, p2_ec_target=9.0, p2_runoff_max=1350.0, p2_vol_cc=9000.0, p2_shot_pc=1.5, p2_tiempo_entre_min=15, p3_vwc_min=24.0),
 }
-
-# Floración en tres regímenes (días dentro de la etapa, contados desde el cambio
-# a 12/12). El primero es el perfil de entrada; los siguientes se aplican solos.
-#   ESTIRAMIENTO (sem. 1-3)  generativo fuerte: P1 2,5 h tras luz, shots 4 %, P2 mínimo
-#   ENGORDE      (sem. 4-6)  vegetativo: P1 1 h tras luz, shots 3 %, P2 activo, runoff alto
-#   MADURACIÓN   (sem. 7+)   generativo moderado: P1 2 h tras luz, shots 3,5 %, P2 mínimo
-# Maceta de 11 L (3 gal): una planta de ~270 g gasta 3-4 L/día y en 15 L no se secaba.
-FLOWER_REGIMES = (
-    {"key": "ESTIRAMIENTO", "label": "Estiramiento", "steering": "GENERATIVO", "start_day": 0.0,
-     "profile": dict(
-         capacidad_bandeja_ml=2400.0, caudal_gotero_lh=3.0, goteros_planta=2,
-         p1_vwc_min=40.0, p1_ec_target=8.0, p1_runoff_max=150.0, p1_vol_cc=6600.0, p1_shot_pc=6.7, p1_tiempo_entre_min=25,
-         p2_vwc_min=38.0, p2_vwc_max=44.0, p2_vwc_cc_ref=60.0, p2_ec_target=9.0, p2_runoff_max=300.0, p2_vol_cc=6600.0, p2_shot_pc=3.3, p2_tiempo_entre_min=40, p3_vwc_min=24.0),
-     "schedule": {"light_on_hour": 6.0, "light_off_hour": 18.0, "p1_offset_min": 180.0, "p2_inicio_hour": 12.0, "p2_fin_hour": 15.0},
-     # Jack's Bloom 10-30-20 a EC 1,9 (alimentación); P1 diluida a EC 1,4 para lavar
-     "solutions": {"p1": {"ec": 1.4, "ph": 6.0, "n": 89.0, "p": 116.0, "k": 148.0},
-                   "p2": {"ec": 1.9, "ph": 6.0, "n": 119.0, "p": 155.0, "k": 197.0}}},
-    {"key": "ENGORDE", "label": "Engorde", "steering": "VEGETATIVO", "start_day": 21.0,
-     "profile": dict(
-         p1_vwc_min=50.0, p1_ec_target=3.4, p1_runoff_max=700.0, p1_vol_cc=6600.0, p1_shot_pc=5.0, p1_tiempo_entre_min=20,
-         p2_vwc_min=52.0, p2_vwc_max=56.0, p2_vwc_cc_ref=60.0, p2_ec_target=4.5, p2_runoff_max=900.0, p2_vol_cc=6600.0, p2_shot_pc=2.5, p2_tiempo_entre_min=25, p3_vwc_min=30.0),
-     "schedule": {"light_on_hour": 6.0, "light_off_hour": 18.0, "p1_offset_min": 60.0, "p2_inicio_hour": 10.0, "p2_fin_hour": 16.0},
-     # Jack's Bloom a EC 2,4; P1 a EC 2,0
-     "solutions": {"p1": {"ec": 2.0, "ph": 6.0, "n": 125.0, "p": 163.0, "k": 207.0},
-                   "p2": {"ec": 2.4, "ph": 6.0, "n": 150.0, "p": 196.0, "k": 249.0}}},
-    {"key": "MADURACION", "label": "Maduración", "steering": "GENERATIVO", "start_day": 49.0,
-     "profile": dict(
-         p1_vwc_min=46.0, p1_ec_target=5.0, p1_runoff_max=300.0, p1_vol_cc=6600.0, p1_shot_pc=10.0, p1_tiempo_entre_min=25,
-         p2_vwc_min=46.0, p2_vwc_max=50.0, p2_vwc_cc_ref=60.0, p2_ec_target=6.0, p2_runoff_max=450.0, p2_vol_cc=6600.0, p2_shot_pc=5.8, p2_tiempo_entre_min=35, p3_vwc_min=26.0),
-     "schedule": {"light_on_hour": 6.0, "light_off_hour": 18.0, "p1_offset_min": 120.0, "p2_inicio_hour": 11.0, "p2_fin_hour": 15.0},
-     # Jack's Finish 7-15-30 (EC 2,1); P1 diluida a EC 1,5
-     "solutions": {"p1": {"ec": 1.5, "ph": 6.0, "n": 71.0, "p": 66.0, "k": 254.0},
-                   "p2": {"ec": 2.1, "ph": 6.0, "n": 100.0, "p": 93.0, "k": 356.0}}},
-)
-DEFAULT_STAGE_PROFILES["FLORACION"] = stage_profile(11000.0, 60.0, 15.0, **FLOWER_REGIMES[0]["profile"])
 
 
 STAGE_SCHEDULES = {
-    # Vegetativo: P1 45-60 min tras la luz; último riego 2 h antes de apagar
-    "PLANTULA": {"light_on_hour": 6.0, "light_off_hour": 24.0, "p1_offset_min": 60.0, "p2_inicio_hour": 11.0, "p2_fin_hour": 21.0},
-    "CRECIMIENTO": {"light_on_hour": 6.0, "light_off_hour": 24.0, "p1_offset_min": 60.0, "p2_inicio_hour": 10.0, "p2_fin_hour": 21.0},
-    "FLORACION": dict(FLOWER_REGIMES[0]["schedule"]),
+    "PLANTULA": {"light_on_hour": 6.0, "light_off_hour": 24.0, "p1_offset_min": 60.0, "p2_inicio_hour": 11.0, "p2_fin_hour": 20.0},
+    "CRECIMIENTO": {"light_on_hour": 6.0, "light_off_hour": 24.0, "p1_offset_min": 60.0, "p2_inicio_hour": 11.0, "p2_fin_hour": 20.0},
+    "FLORACION": {"light_on_hour": 6.0, "light_off_hour": 18.0, "p1_offset_min": 60.0, "p2_inicio_hour": 10.5, "p2_fin_hour": 17.5},
 }
 
-# Soluciones de riego. P1 = lavado (receta diluida), P2 = alimentación de mantenimiento.
-# Jack's 3-2-1: Clone 15-6-17 (propagación), Parte A 5-12-26 + Parte B 15-0-0 (vegetativo),
-# Bloom 10-30-20 (floración) y Finish 7-15-30 (maduración); ppm de N de la guía de Growlink.
 STAGE_NUTRIENT_SOLUTIONS = {
     "PLANTULA": {
-        "p1": {"ec": 0.9, "ph": 5.8, "n": 100.0, "p": 18.0, "k": 94.0},
-        "p2": {"ec": 1.1, "ph": 5.8, "n": 125.0, "p": 22.0, "k": 118.0},
+        "p1": {"ec": 1.2, "ph": 5.8, "n": 90.0, "p": 30.0, "k": 110.0},
+        "p2": {"ec": 1.3, "ph": 5.8, "n": 90.0, "p": 35.0, "k": 120.0},
     },
     "CRECIMIENTO": {
-        "p1": {"ec": 2.0, "ph": 5.9, "n": 127.0, "p": 44.0, "k": 184.0},
-        "p2": {"ec": 2.4, "ph": 5.9, "n": 150.0, "p": 52.0, "k": 216.0},
+        "p1": {"ec": 2.2, "ph": 5.9, "n": 160.0, "p": 50.0, "k": 200.0},
+        "p2": {"ec": 2.4, "ph": 5.9, "n": 150.0, "p": 55.0, "k": 220.0},
     },
-    "FLORACION": copy.deepcopy(FLOWER_REGIMES[0]["solutions"]),
+    "FLORACION": {
+        "p1": {"ec": 2.8, "ph": 6.0, "n": 110.0, "p": 80.0, "k": 260.0},
+        "p2": {"ec": 3.2, "ph": 6.0, "n": 95.0, "p": 95.0, "k": 300.0},
+    },
 }
 
 STAGE_SUBSTRATE_INIT = {
-    "PLANTULA": {"vwc": 45.0, "ec": 1.1, "ph": 5.8, "n": 125.0, "p": 22.0, "k": 118.0},
-    "CRECIMIENTO": {"vwc": 52.0, "ec": 2.2, "ph": 5.9, "n": 150.0, "p": 52.0, "k": 216.0},
-    "FLORACION": {"vwc": 45.0, "ec": 2.4, "ph": 6.0, "n": 125.0, "p": 150.0, "k": 220.0},
+    "PLANTULA": {"vwc": 45.0, "ec": 1.2, "ph": 5.8, "n": 90.0, "p": 30.0, "k": 110.0},
+    "CRECIMIENTO": {"vwc": 52.0, "ec": 2.2, "ph": 5.9, "n": 160.0, "p": 50.0, "k": 200.0},
+    "FLORACION": {"vwc": 42.0, "ec": 2.8, "ph": 6.0, "n": 110.0, "p": 75.0, "k": 250.0},
 }
 
 # ---------------------------------------------------------------------------
@@ -468,14 +429,6 @@ class GreenhousePlantPhysics:
         self.disparo_fase = None
         self.fase_actual_planta = "P1_ESPERA" # P1_ESPERA, P1_SUBIENDO, P2_MANTENIENDO, P3_NOCHE
 
-        # Métricas diarias: se cierran al amanecer y alimentan al asesor agronómico.
-        self.day_stats = self._new_day_stats()
-        self.last_day_stats = None
-        self._last_irrig_end_mean = None     # VWC medio al cerrar el último riego
-        self._day_first_shot_done = False
-        self._shot_was_active = False
-        self.dryback_pts = None              # caída entre el último riego de ayer y el primero de hoy
-
         # Firmware: p2EsperandoPiso — hysteresis flag.
         # Set True when VWC hits p2_vwc_max; cleared when VWC drops below p2_vwc_min.
         # P2 will not fire again until this flag is cleared.
@@ -515,51 +468,6 @@ class GreenhousePlantPhysics:
         self.stage_profiles = {key: dict(value) for key, value in DEFAULT_STAGE_PROFILES.items()}
         self._load_stage_profile(self.management_stage, preserve_vwc=False)
         self.set_substrate(self.substrate_type, preserve_vwc=False)
-
-    def apply_regime_profile(self, overrides):
-        """Aplica un régimen de floración: edita el perfil de etapa y, si la planta ya
-        está en floración, la configuración viva (la maceta no cambia aquí)."""
-        profile = self.stage_profiles["FLORACION"]
-        for key, value in overrides.items():
-            profile[key] = value
-        if self.management_stage == "FLORACION":
-            for key, value in overrides.items():
-                if key in IRRIGATION_FIELDS:
-                    setattr(self.config, key, value)
-
-    @staticmethod
-    def _new_day_stats():
-        return {"p1_shots": 0, "p2_shots": 0, "p3_shots": 0, "manual_shots": 0,
-                "irrigation_ml": 0.0, "runoff_ml": 0.0, "drain_salt": 0.0,
-                "vwc_min": None, "vwc_max": None}
-
-    def note_shot_edges(self):
-        """Cuenta disparos y mide el dryback en los flancos de la válvula de riego."""
-        active = bool(self.disparo_activo)
-        if active and not self._shot_was_active:
-            key = {"P1": "p1_shots", "P2": "p2_shots", "P3": "p3_shots"}.get(self.disparo_fase, "manual_shots")
-            self.day_stats[key] += 1
-            if not self._day_first_shot_done:
-                self._day_first_shot_done = True
-                if self._last_irrig_end_mean is not None:
-                    self.dryback_pts = max(0.0, self._last_irrig_end_mean - self.vwc_mean)
-        elif self._shot_was_active and not active:
-            self._last_irrig_end_mean = self.vwc_mean
-        self._shot_was_active = active
-
-    def close_day(self):
-        """Cierra las métricas del día que termina y abre las del siguiente."""
-        s = self.day_stats
-        irr = s["irrigation_ml"]
-        s["runoff_pct"] = round(100.0 * s["runoff_ml"] / irr, 1) if irr > 1.0 else 0.0
-        s["drain_ec"] = round(s["drain_salt"] / s["runoff_ml"], 2) if s["runoff_ml"] > 1.0 else None
-        s["dryback_pts"] = None if self.dryback_pts is None else round(self.dryback_pts, 1)
-        s["shots"] = s["p1_shots"] + s["p2_shots"] + s["p3_shots"]
-        s["ec_end"] = round(self.ec, 2)
-        s["ph_end"] = round(self.ph, 2)
-        self.last_day_stats = s
-        self.day_stats = self._new_day_stats()
-        self._day_first_shot_done = False
 
     @property
     def W(self): return self.W_t + self.W_b
@@ -729,7 +637,6 @@ class GreenhousePlantPhysics:
             self.p_mg += inflow_ml * solution.p / 1000.0
             self.k_mg += inflow_ml * solution.k / 1000.0
             self.total_irrigation_ml += inflow_ml
-            self.day_stats["irrigation_ml"] += inflow_ml
             
         # 3. Redistribución, capilaridad y drenaje
         fc_t = self.vwc_cc * (1.0 - FC_STRATIFICATION) / 100.0 * self.vol_top_ml
@@ -757,8 +664,6 @@ class GreenhousePlantPhysics:
             drain = min(excess, (self.drain_rate_max * dt_min) * (excess / (self.pot_ml * 0.15)))
             drain = min(drain, excess)
             runoff_ml = drain
-            self.day_stats["runoff_ml"] += runoff_ml
-            self.day_stats["drain_salt"] += runoff_ml * self.ec   # EC del agua que sale
             self.W_b -= runoff_ml
             sales_drained = runoff_ml * self.ec
             self.S = max(0.0, self.S - sales_drained)
@@ -835,11 +740,6 @@ class GreenhousePlantPhysics:
         self.p_mg = max(0.0, self.p_mg * (1.0 - uptake_fraction * 0.9))
         self.k_mg = max(0.0, self.k_mg * (1.0 - uptake_fraction * 1.1))
         
-        v = self.vwc
-        ds = self.day_stats
-        ds["vwc_min"] = v if ds["vwc_min"] is None else min(ds["vwc_min"], v)
-        ds["vwc_max"] = v if ds["vwc_max"] is None else max(ds["vwc_max"], v)
-
         # 6. Biología
         self.biology.update_growth(
             dt_hours, self.vwc_root, self.ec, self.ph,
@@ -922,8 +822,6 @@ class GreenhouseEnvironment:
         self.stage_schedules = copy.deepcopy(STAGE_SCHEDULES)
         self.stage_solutions = copy.deepcopy(STAGE_NUTRIENT_SOLUTIONS)
         self.room_stage = "PLANTULA"
-        self.room_stage_start_sim = self.sim_time_seconds
-        self.flower_regime = None
         self.crop_events = []
         self.apply_stage_environment("PLANTULA")
         # Día 1: el sustrato arranca a capacidad de campo (recién regado, como al sembrar).
@@ -965,13 +863,7 @@ class GreenhouseEnvironment:
         """Aplica la receta de nutrientes y horario recomendado para la etapa de manejo."""
         if stage not in MANAGEMENT_STAGES:
             return
-        if stage != self.room_stage:
-            self.room_stage_start_sim = self.sim_time_seconds
         self.room_stage = stage
-        if stage == "FLORACION":
-            self._set_flower_regime(FLOWER_REGIMES[0])      # entra en estiramiento
-        else:
-            self.flower_regime = None
         sched = self.stage_schedules[stage]
         self.light_on_hour = sched["light_on_hour"]
         self.light_off_hour = sched["light_off_hour"]
@@ -981,39 +873,6 @@ class GreenhouseEnvironment:
         sols = self.stage_solutions[stage]
         self.update_solution("P1", sols["p1"])
         self.update_solution("P2", sols["p2"])
-
-    def _set_flower_regime(self, regime):
-        """Cambia el régimen de floración de la sala: horario, soluciones y riego."""
-        self.flower_regime = regime["key"]
-        self.stage_schedules["FLORACION"] = dict(regime["schedule"])
-        self.stage_solutions["FLORACION"] = copy.deepcopy(regime["solutions"])
-        for p in self.plants:
-            p.apply_regime_profile(regime["profile"])
-        if self.room_stage == "FLORACION":
-            sched = regime["schedule"]
-            self.light_on_hour = sched["light_on_hour"]
-            self.light_off_hour = sched["light_off_hour"]
-            self.p1_offset_min = sched["p1_offset_min"]
-            self.p2_inicio_hour = sched["p2_inicio_hour"]
-            self.p2_fin_hour = sched["p2_fin_hour"]
-            self.update_solution("P1", regime["solutions"]["p1"])
-            self.update_solution("P2", regime["solutions"]["p2"])
-
-    @property
-    def room_stage_days(self):
-        return max(0.0, (self.sim_time_seconds - self.room_stage_start_sim) / 86400.0)
-
-    def _review_flower_regime(self):
-        """Estiramiento → engorde → maduración según los días desde el 12/12."""
-        if self.room_stage != "FLORACION":
-            return
-        days = self.room_stage_days
-        target = FLOWER_REGIMES[0]
-        for regime in FLOWER_REGIMES:
-            if days >= regime["start_day"]:
-                target = regime
-        if target["key"] != self.flower_regime:
-            self._set_flower_regime(target)
 
     def set_management_stage(self, plant_id, stage, update_env=False):
         """Salto MANUAL de etapa (reinicia la biología). El avance orgánico usa review_crop_plan."""
@@ -1084,7 +943,6 @@ class GreenhouseEnvironment:
                                              note="cambio de sala a 12/12")
                     if ev:
                         events.append(ev)
-        self._review_flower_regime()
         return events
 
     def set_substrate(self, plant_id, substrate_type):
@@ -1340,14 +1198,10 @@ class GreenhouseEnvironment:
 
                 if p.vwc <= cfg.p1_vwc_min or p.ec > cfg.p1_ec_target:
                     p.fase_p1_iniciada = True
-                # Corte: runoff objetivo alcanzado (p1RunoffMax, como el firmware). El sensor
-                # solo actúa de tope de seguridad: tras saturar, la lectura superior puede
-                # superar la CC en la transición mientras la capa inferior aún drena.
-                vwc_tope = p.vwc_cc * (1.0 + FC_STRATIFICATION) + 3.0
-                if p.runoff_fase_p1 >= cfg.p1_runoff_max or p.vwc >= vwc_tope:
+                if p.runoff_fase_p1 >= cfg.p1_runoff_max or p.vwc >= p.vwc_cc + 1.0:
                     p.fase_p1_iniciada = False
 
-                necesita_subir = getattr(p, 'fase_p1_iniciada', False) and runoff_ok and (p.vwc < vwc_tope)
+                necesita_subir = getattr(p, 'fase_p1_iniciada', False) and runoff_ok and (p.vwc < p.vwc_cc + 1.0)
 
                 if intervalo_ok and necesita_subir:
                     # Iniciar disparo P1 — volumen escalado por factor VPD (EjecucionRiegoP1.cpp)
@@ -1453,7 +1307,6 @@ class GreenhouseEnvironment:
         # Reiniciar runoff diario al amanecer (igual que el firmware en cada nuevo día)
         if new_day != prev_day:
             for p in self.plants:
-                p.close_day()
                 p.tray_runoff_day = 0.0
                 p.fase_p1_iniciada = False
                 # Los contadores de fase también arrancan en cero con cada nuevo día
@@ -1465,8 +1318,6 @@ class GreenhouseEnvironment:
 
         # 1. Ejecutar el controlador de riego automático
         self.execute_automatic_irrigation_logic(dt_sim_seconds)
-        for p in self.plants:
-            p.note_shot_edges()
         
         # 2. Clima
         target_t = self.target_temp_day if self.is_day else self.target_temp_night
@@ -1703,94 +1554,6 @@ class GreenhouseEnvironment:
                         "waiting_for_room": waiting_for_room})
         return out
 
-    # Objetivos de referencia para el asesor (investigación crop steering).
-    # dryback en puntos de VWC; ec_ratio = EC de drenaje / EC de entrada aceptable.
-    ADVISOR_TARGETS = {
-        "PLANTULA": {"dryback": (3, 10), "runoff": (0, 20)},
-        "CRECIMIENTO": {"dryback": (5, 15), "runoff": (10, 25)},
-        "ESTIRAMIENTO": {"dryback": (15, 35), "runoff": (0, 10)},
-        "ENGORDE": {"dryback": (8, 15), "runoff": (10, 25)},
-        "MADURACION": {"dryback": (12, 30), "runoff": (0, 10)},
-    }
-
-    def agronomic_advisor(self, p):
-        """Dr. Cana: diagnóstico y respuesta recomendada según el estado de la planta enfocada.
-        Devuelve una lista ordenada por gravedad de {level, code, message}."""
-        out = []
-        def add(level, code, msg):
-            out.append({"level": level, "code": code, "message": msg})
-        n = p.id + 1
-        bio = p.biology
-        if p.inundacion_critica:
-            add("danger", "flood", f"Riego bloqueado por inundación (planta {n}): la bandeja superó su capacidad. "
-                "Vacía la bandeja y ejecuta TA con la bandeja vacía.")
-        elif p.tare_with_water:
-            add("warning", "tare_water", f"TA con agua (planta {n}): la celda lee cero con {p.tray_ml:.0f} ml físicos. "
-                "Puede ocultar una inundación: vacía físicamente y vuelve a tarar.")
-        if p.vwc < 20.0:
-            add("danger", "drought", f"Sequía (planta {n}): VWC {p.vwc:.0f}%. Riesgo de marchitez; verifica bomba, válvula y goteros.")
-        regime = self.flower_regime if self.room_stage == "FLORACION" else self.room_stage
-        tg = self.ADVISOR_TARGETS.get(regime)
-        sols = self.stage_solutions.get(self.room_stage, {})
-        ec_in = (sols.get("p2") or {}).get("ec") or self.solution_p2.ec
-        ls = p.last_day_stats or {}
-        drain_ec = ls.get("drain_ec")
-        # EC de drenaje vs entrada (regla de la guía: arriba y subiendo → más volumen o menos EC)
-        if drain_ec is not None and ec_in:
-            reg = next((r for r in FLOWER_REGIMES if r["key"] == self.flower_regime), None)
-            gen = bool(reg and reg["steering"] == "GENERATIVO" and self.room_stage == "FLORACION")
-            lim = 2.5 if gen else 1.6
-            if drain_ec > ec_in * lim + 3.0:
-                add("danger", "drain_ec_high", f"EC de drenaje {drain_ec} vs entrada {ec_in}: acumulación excesiva de sales. "
-                    "Aplica un lavado P1 con 15–20 % de runoff y baja la EC de P2 un 15–20 %; si hay quemadura de puntas, reanuda más bajo.")
-            elif drain_ec > ec_in * lim:
-                add("warning", "drain_ec_rising", f"EC de drenaje {drain_ec} por encima de la entrada {ec_in}: "
-                    "sube el volumen/frecuencia de P2 o baja un poco la EC de entrada.")
-            elif drain_ec < ec_in * 0.8 and ls.get("runoff_pct", 0) > 5:
-                add("info", "drain_ec_low", f"EC de drenaje {drain_ec} bajo la entrada {ec_in}: la planta consume más de lo que recibe. "
-                    "Reduce el runoff o sube levemente la EC.")
-        if p.ec > 10.0:
-            add("danger", "pore_ec_critical", f"EC de poro {p.ec:.1f} mS/cm: lockout probable (hojas en garra, puntas quemadas). "
-                "Riego de lavado con solución a media fuerza y reanudar con EC menor.")
-        elif p.ec > 4.2 and self.room_stage in ("PLANTULA", "CRECIMIENTO"):
-            add("warning", "pore_ec_veg", f"EC de poro {p.ec:.1f} alta para etapa vegetativa: lava con P1 y baja la EC de alimentación.")
-        # pH del drenaje
-        if abs(p.ph - 5.9) > 0.3 and ls:
-            sentido = "sube" if p.ph > 5.9 else "baja"
-            add("warning", "ph_shift", f"pH del sustrato {p.ph:.1f}: se desvió más de 0,3 del objetivo (5,9). "
-                f"Ajusta el pH de la solución ({'más ácido' if p.ph > 5.9 else 'menos ácido'}); riesgo de bloqueo de micronutrientes.")
-        # dryback y runoff vs objetivo del régimen
-        if tg and ls:
-            db = ls.get("dryback_pts")
-            lo, hi = tg["dryback"]
-            if db is not None and db < lo - 1.5:
-                add("info", "dryback_low", f"Dryback {db} pts por debajo del objetivo {lo}–{hi} del régimen: "
-                    "retrasa el primer riego P1 o adelanta el fin de P2 para ampliar el secado.")
-            elif db is not None and db > hi + 3:
-                add("warning", "dryback_high", f"Dryback {db} pts sobre el objetivo {lo}–{hi}: riesgo de estrés hídrico. "
-                    "Adelanta P1 o añade disparos P2.")
-            ro = ls.get("runoff_pct")
-            rlo, rhi = tg["runoff"]
-            if ro is not None and ls.get("irrigation_ml", 0) > 0 and ro > rhi + 10:
-                add("info", "runoff_high", f"Runoff {ro}% sobre lo esperado ({rlo}–{rhi}%): baja p1RunoffMax o el volumen de disparo.")
-        if p.vwc > 55.0 and p.tray_weight_ml > 300:
-            add("info", "saturated", f"Sustrato en capacidad de campo con {p.tray_weight_ml:.0f} ml en bandeja; es normal tras P1.")
-        if bio.root_health < 60.0:
-            add("warning", "root_health", f"Salud radicular {bio.root_health:.0f}%: revisa hipoxia (riego excesivo), pH y EC.")
-        elif bio.biomass_g > (p.pot_ml / 500.0) * 12.0:
-            add("warning", "rootbound", f"Restricción radicular (planta {n}): la biomasa saturó la maceta de {p.pot_ml/1000:.1f} L. Considera trasplantar.")
-        if self.vpd < 0.6:
-            add("warning", "vpd_low", "VPD < 0,6 kPa: la transpiración se frena. Aumenta ventilación/deshumidifica.")
-        elif self.vpd > 1.6:
-            add("warning", "vpd_high", "VPD > 1,6 kPa: aire muy seco/cálido; riesgo de estrés hídrico foliar.")
-        if not out:
-            gen = bio.steering_type == "GENERATIVO"
-            add("success", "ok", "Steering " + ("generativo" if gen else "vegetativo") +
-                f" en rango (planta {n}): sin alertas.")
-        order = {"danger": 0, "warning": 1, "info": 2, "success": 3}
-        out.sort(key=lambda a: order[a["level"]])
-        return out
-
     def dump_state(self):
         """Exporta el estado completo de las 12 plantas y el foco actual."""
         sel_p = self.plants[self.selected_plant_id]
@@ -1868,11 +1631,6 @@ class GreenhouseEnvironment:
             "selected_plant_id": self.selected_plant_id,
             "crop_plan": copy.deepcopy(self.crop_plan),
             "room_stage": self.room_stage,
-            "flower_regime": self.flower_regime,
-            "flower_regime_label": next((r["label"] for r in FLOWER_REGIMES if r["key"] == self.flower_regime), None),
-            "advisor": self.agronomic_advisor(sel_p),
-            "flower_regime_steering": next((r["steering"] for r in FLOWER_REGIMES if r["key"] == self.flower_regime), None),
-            "room_stage_days": round(self.room_stage_days, 1),
             "stage_schedules": copy.deepcopy(self.stage_schedules),
             "crop_events": list(self.crop_events[-20:]),
             "plants_all": plants_summary,
@@ -1884,8 +1642,6 @@ class GreenhouseEnvironment:
                 "substrate_label": SUBSTRATE_PROFILES[sel_p.substrate_type]["label"],
                 "vwc": round(sel_p.vwc, 1),
                 "vwc_bottom": round(sel_p.vwc_bottom, 1),
-                "day_stats": sel_p.last_day_stats,
-                "today_stats": {k: (round(v, 1) if isinstance(v, float) else v) for k, v in sel_p.day_stats.items()},
                 "vwc_mean": round(sel_p.vwc_mean, 1),
                 "ec": round(sel_p.ec, 2),
                 "ph": round(sel_p.ph, 2),
