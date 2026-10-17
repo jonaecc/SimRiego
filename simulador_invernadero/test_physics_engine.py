@@ -5,11 +5,12 @@ from physics_engine import GreenhouseEnvironment
 
 
 class InitialStateTests(unittest.TestCase):
-    def test_day_one_starts_at_lights_on_with_substrate_at_field_capacity(self):
+    def test_day_one_starts_at_lights_on_with_30_percent_vwc(self):
         env = GreenhouseEnvironment()
         self.assertAlmostEqual(env.sim_time_seconds, 6 * 3600.0)
         for p in env.plants:
-            self.assertAlmostEqual(p.vwc, p.vwc_cc, places=3)
+            self.assertAlmostEqual(p.vwc, 30.0, delta=0.5)
+            self.assertAlmostEqual(p.vwc_mean, 30.0, delta=0.5)
 
 
 class AutomaticIrrigationTests(unittest.TestCase):
@@ -113,7 +114,7 @@ class AutomaticIrrigationTests(unittest.TestCase):
     def test_field_capacity_test_detects_first_drainage_and_derives_volume(self):
         self.env.sim_time_seconds = 6.5 * 3600  # P0: sin riego automático paralelo
         self.assertTrue(self.env.start_field_capacity_test(0, 3500, 200, 1))
-        for _ in range(60):   # Más iteraciones para caudal bajo de plántula (1 gotero × 1.8 L/h)
+        for _ in range(240):   # Más iteraciones para caudal bajo de plántula (1 gotero × 1.8 L/h)
             self.env.step(1.0)  # 60 s simulados por paso
             if self.plant.cc_result:
                 break

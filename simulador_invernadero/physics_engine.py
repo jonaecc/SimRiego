@@ -155,6 +155,9 @@ STAGE_NUTRIENT_SOLUTIONS = {
     },
 }
 
+# VWC (%) con el que arranca el día 1 de la simulación.
+INITIAL_VWC_PCT = 30.0
+
 STAGE_SUBSTRATE_INIT = {
     "PLANTULA": {"vwc": 45.0, "ec": 1.2, "ph": 5.8, "n": 90.0, "p": 30.0, "k": 110.0},
     "CRECIMIENTO": {"vwc": 52.0, "ec": 2.2, "ph": 5.9, "n": 160.0, "p": 50.0, "k": 200.0},
@@ -824,10 +827,10 @@ class GreenhouseEnvironment:
         self.room_stage = "PLANTULA"
         self.crop_events = []
         self.apply_stage_environment("PLANTULA")
-        # Día 1: el sustrato arranca a capacidad de campo (recién regado, como al sembrar).
+        # Día 1: el sustrato arranca con VWC inicial fijo (INITIAL_VWC_PCT), no a capacidad de campo.
         for p in self.plants:
             ec0 = p.ec
-            p.W = p.W_cc
+            p.W = p.pot_ml * INITIAL_VWC_PCT / 100.0
             p.S = p.W * ec0
 
     @property
