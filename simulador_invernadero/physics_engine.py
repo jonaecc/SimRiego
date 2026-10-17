@@ -129,7 +129,7 @@ DEFAULT_STAGE_PROFILES = {
     # floración. Si se configura una maceta igual o menor, se conserva la actual.
     "FLORACION": stage_profile(15000.0, 60.0, 15.0, capacidad_bandeja_ml=2400.0,
         caudal_gotero_lh=3.0, goteros_planta=2,
-        p1_vwc_min=36.0, p1_ec_target=4.2, p1_runoff_max=300.0, p1_vol_cc=3000.0, p1_shot_pc=4.0, p1_tiempo_entre_min=15,
+        p1_vwc_min=36.0, p1_ec_target=5.0, p1_runoff_max=300.0, p1_vol_cc=3000.0, p1_shot_pc=4.0, p1_tiempo_entre_min=15,
         p2_vwc_min=40.0, p2_vwc_max=50.0, p2_vwc_cc_ref=60.0, p2_ec_target=9.0, p2_runoff_max=450.0, p2_vol_cc=3000.0, p2_shot_pc=2.0, p2_tiempo_entre_min=20, p3_vwc_min=24.0),
 }
 
@@ -234,11 +234,12 @@ class PlantBiology:
     def leaf_area_m2(self):
         """Área foliar [m²] (alometría): crece de forma continua con la biomasa.
 
-        LA = 0.00265 · B^1.177 (≈0.006 m² a 2 g, 0.05 a 12 g, 0.37 a 67 g, 1.7 a 238 g),
+        LA = 0.009 · B^0.95 (≈0.02 m² a 2 g, 0.18 a 24 g, 0.58 a 80 g, 2.0 a 300 g;
+        ≈0.008 m²/g en vegetativo, coherente con ~8-10 m²/kg de planta),
         con tope por autosombreado. Reemplaza los valores escalón anteriores y es la
         base de la transpiración: la planta transpira según su tamaño, no según la etapa.
         """
-        return min(2.2, 0.00265 * max(self.biomass_g, 0.1) ** 1.177)
+        return min(2.2, 0.009 * max(self.biomass_g, 0.1) ** 0.95)
 
     def sync_to_stage(self, stage):
         """Sincroniza la morfología base (solo para resets o inicialización explícita)."""
