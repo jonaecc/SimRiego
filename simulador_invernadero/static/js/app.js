@@ -244,51 +244,13 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     function updateAgronomicAdvisor(s) {
-        const p = s.plant_focus;
-        const e = s.environment;
-        const c = s.clock;
         const advEl = document.getElementById('advisorMsg');
         const advBox = document.getElementById('advisorBox');
-
-        let msg = "";
-        let alertType = "normal";
-
-        if (p.inundacion_critica) {
-            msg = `🚨 <b>RIEGO BLOQUEADO POR INUNDACIÓN (Planta ${p.id + 1}):</b> La celda lee ${p.tray_weight_g} g (CB: ${p.config.capacidad_bandeja_ml} ml). Vacía la bandeja (botón "Vaciar bandeja") y luego ejecuta TA con la bandeja vacía.`;
-            alertType = "danger";
-        } else if (p.tare_with_water) {
-            msg = `⚠️ <b>TARA CON AGUA (Planta ${p.id + 1}):</b> TA dejó la lectura de la celda en cero con ${p.tray_actual_ml} ml físicos. Esto reproduce el firmware actual, pero puede ocultar una inundación: vacía físicamente la bandeja y vuelve a tarar.`;
-            alertType = "warning";
-        } else if (p.vwc < 20.0) {
-            msg = `⚠️ <b>ALERTA DE SEQUÍA (Planta ${p.id + 1}):</b> El sustrato cayó a ${p.vwc}% VWC. Las hojas pierden turgencia. En modo AUTO, el controlador iniciará disparo P1/P2 al cumplirse el reposo.`;
-            alertType = "danger";
-        } else if (p.vwc > 55.0 && p.tray_weight_g > 300) {
-            msg = `💧 <b>SATURACIÓN Y DRENAJE (Planta ${p.id + 1}):</b> Sustrato en Capacidad de Campo. Escorrentía acumulada: ${p.tray_weight_g} ml. El ciclo P1 cortó exitosamente al alcanzar el límite de runoff.`;
-            alertType = "warning";
-        } else if (p.ec > 4.2) {
-            msg = `⚡ <b>TOXICIDAD DE SALES (EC ${p.ec} mS/cm):</b> Acumulación crítica. Posible quemadura de puntas y hojas en garra. Ajusta la EC del tanque a valores menores para lavar sales.`;
-            alertType = "danger";
-        } else if (e.vpd < 0.6) {
-            msg = "🌫️ <b>VPD MUY BAJO (<0.6 kPa):</b> Exceso de humedad ambiental. La transpiración se detiene. Aumenta la ventilación.";
-            alertType = "warning";
-        } else if (e.vpd > 1.6) {
-            msg = "🔥 <b>VPD MUY ALTO (>1.6 kPa):</b> Aire excesivamente seco o cálido. Riesgo de estrés hídrico foliar rápido.";
-            alertType = "warning";
-        } else if (p.biomass_g > (p.pot_volume_ml / 500.0) * 12.0) {
-            msg = `🪴 <b>RESTRICCIÓN RADICULAR (ROOTBOUND en Planta ${p.id + 1}):</b> La biomasa (${p.biomass_g} g) saturó la maceta de ${(p.pot_volume_ml/1000).toFixed(1)} L. Salud de raíz en ${p.root_health_pct}%. Usa el panel "🪴 Trasplante" para pasar a una maceta mayor y permitir que la planta continúe creciendo orgánicamente.`;
-            alertType = "warning";
-        } else {
-            const isGen = p.steering_type === "GENERATIVO";
-            if (isGen) {
-                msg = `⚡ <b>STEERING GENERATIVO ACTIVO (Planta ${p.id + 1}):</b> Dryback más amplio y EC adecuada. Guiando la planta hacia entrenudos compactos, cálices densos y mayor producción de resina/tricomas.`;
-            } else {
-                msg = `🌿 <b>STEERING VEGETATIVO ACTIVO (Planta ${p.id + 1}):</b> Humedad radicular estable y baja salinidad. Estimulando rápida expansión foliar, desarrollo de ramas y biomasa verde vigorosa.`;
-            }
-            alertType = "success";
-        }
-
-        advEl.innerHTML = msg;
-        advBox.className = `advisor-box ${alertType}`;
+        const list = s.advisor || [];
+        const icons = {danger: '🚨', warning: '⚠️', info: 'ℹ️', success: '🌿'};
+        advEl.innerHTML = list.slice(0, 4).map(a => `<div>${icons[a.level] || ''} ${a.message}</div>`).join('');
+        const top = list.length ? list[0].level : 'success';
+        advBox.className = `advisor-box ${top === 'info' ? 'normal' : top}`;
     }
 
     // 4. Configuración de controles y eventos
