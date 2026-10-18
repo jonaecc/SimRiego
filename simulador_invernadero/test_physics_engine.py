@@ -1,7 +1,7 @@
 """Pruebas de regresión del gemelo digital (sin navegador ni hardware)."""
 import unittest
 
-from physics_engine import GreenhouseEnvironment, NutrientSolution
+from physics_engine import GreenhouseEnvironment, NutrientSolution, transpiration_ml_min
 
 
 class InitialStateTests(unittest.TestCase):
@@ -229,7 +229,8 @@ class EvapotranspirationTests(unittest.TestCase):
             is_day = h < hours_day
             for _ in range(60):
                 plant.W = max(plant.W, 0.55 * plant.pot_ml)   # sin estrés hídrico: mide la demanda
-                plant.step(60.0, is_day, 1.1, 25.0, False, sol, 1.0)
+                plant.step(60.0, is_day, 1.1, 25.0, False, sol, 1.0,
+                           ppfd=950.0 if is_day else 0.0, footprint_m2=0.25)
         return plant.total_et_ml - et0
 
     def test_transpiration_scales_with_plant_size_not_with_stage(self):
@@ -240,7 +241,7 @@ class EvapotranspirationTests(unittest.TestCase):
         small.biology.biomass_g, big.biology.biomass_g = 5.0, 100.0
         et_small, et_big = self._daily_et_ml(small), self._daily_et_ml(big)
         self.assertGreater(et_big, 5.0 * et_small)
-        self.assertTrue(600.0 < et_big < 2500.0, f"planta vegetativa de 100 g: {et_big:.0f} mL/día")
+        self.assertTrue(450.0 < et_big < 1100.0, f"planta vegetativa de 100 g: {et_big:.0f} mL/día")
 
     def test_seedling_uses_a_small_fraction_of_its_pot_per_day(self):
         env = GreenhouseEnvironment()
@@ -254,7 +255,19 @@ class EvapotranspirationTests(unittest.TestCase):
         env.update_plant_config(0, {"pot_volume_ml": 15000})
         p.biology.biomass_g = 200.0
         et = self._daily_et_ml(p, hours_day=12.0)
-        self.assertTrue(2500.0 < et < 6000.0, f"floración madura: {et:.0f} mL/día")
+        self.assertTrue(350.0 < et < 1000.0, f"floración madura: {et:.0f} mL/día")
+
+    def test_transpiration_never_exceeds_the_available_energy(self):
+        """λE por m² de suelo no puede superar la radiación absorbida más el término de VPD."""
+        for ppfd in (600.0, 950.0, 1200.0):
+            ml_min = transpiration_ml_min(5.0, 0.25, ppfd, 1.2, 25.5, 400.0, 0.03, True)
+            w_m2 = ml_min / 1000.0 / 60.0 / 0.25 * 2.45e6
+            self.assertLess(w_m2, ppfd / 4.57 * 0.85 + 120.0)
+
+    def test_footprint_scales_water_use_per_plant(self):
+        a = transpiration_ml_min(3.0, 0.25, 950.0, 1.2, 25.5, 400.0, 0.03, True)
+        b = transpiration_ml_min(3.0, 0.50, 950.0, 1.2, 25.5, 400.0, 0.03, True)
+        self.assertGreater(b, 1.3 * a)
 
     def test_leaf_area_grows_continuously_with_biomass(self):
         env = GreenhouseEnvironment()

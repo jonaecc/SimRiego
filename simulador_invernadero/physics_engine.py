@@ -188,8 +188,49 @@ NEXT_STAGE = {"PLANTULA": "CRECIMIENTO", "CRECIMIENTO": "FLORACION", "FLORACION"
 # Transpiración con luces ON a VPD 1,1 kPa y exposición 1,0, por m² de hoja.
 # 3,0 mL/min/m² ≈ 3,2 L/m²/día a 18 h de luz: una planta vegetativa de 0,37 m²
 # gasta ~1,2 L/día y una en floración de ~1,5 m², ~3,5 L/día (12 h de luz).
-K_TRANSP_DAY = 3.0
-K_TRANSP_NIGHT = 0.45          # estomas casi cerrados: 15 % del diurno
+K_TRANSP_DAY = 3.0             # (ya no se usa: la transpiración sale de Penman-Monteith)
+K_TRANSP_NIGHT = 0.45
+
+# Transpiración por Penman-Monteith a escala de dosel (ver el documento de investigación).
+#   λE = [Δ·Rn + ρ·cp·VPD·ga] / [Δ + γ·(1 + ga/gc)],   gc = gs · LAI_iluminado
+# Todo se calcula por m² de suelo y se multiplica por el área de suelo de la planta.
+PM_LIGHT_ABSORPTION = 0.85      # fracción de la luz LED que absorbe un dosel cerrado
+PM_NET_LONGWAVE_W_M2 = 15.0     # pérdida neta de onda larga de un dosel cerrado [W/m²]
+PM_K_EXT = 0.6                  # coeficiente de extinción de luz del dosel
+PM_GS_MOL_BASE = 0.3715         # gs de hoja [mol/m²/s] = BASE + SLOPE·PPFD (cannabis, medido)
+PM_GS_MOL_SLOPE = 1.16e-4
+PM_GS_MOL_NIGHT = 0.05          # estomas casi cerrados de noche (a calibrar)
+PM_MOL_TO_M_S = 0.0245          # 1 mol/m²/s de gas ≈ 0,0245 m/s a 25 °C
+PM_VPD_KNEE_KPA = 1.5           # sobre este VPD los estomas cierran 20 %/kPa (a calibrar)
+PM_CO2_GS_SLOPE = 0.42 / 400.0  # gs −42 % al subir de 350 a 750 ppm (Chandra et al. 2008)
+
+
+def transpiration_ml_min(leaf_area_m2, footprint_m2, ppfd, vpd_kpa, temp_c, co2_ppm,
+                         aero_cond_m_s, is_day, water_stress=1.0):
+    """Transpiración de UNA planta [mL/min] por balance de energía (Penman-Monteith)."""
+    footprint_m2 = max(0.01, footprint_m2)
+    lai = max(0.0, leaf_area_m2) / footprint_m2
+    if lai <= 0.0:
+        return 0.0
+    f_int = 1.0 - math.exp(-PM_K_EXT * lai)                 # luz interceptada
+    lai_lit = f_int / PM_K_EXT                              # LAI iluminado
+    rn = (ppfd / 4.57 * PM_LIGHT_ABSORPTION - PM_NET_LONGWAVE_W_M2) * f_int if is_day else 0.0
+    rn = max(0.0, rn)
+    gs_mol = (PM_GS_MOL_BASE + PM_GS_MOL_SLOPE * ppfd) if is_day else PM_GS_MOL_NIGHT
+    gs_mol *= max(0.5, min(1.1, 1.0 - PM_CO2_GS_SLOPE * (co2_ppm - 350.0)))
+    gs_mol *= 1.0 / (1.0 + 0.2 * max(0.0, vpd_kpa - PM_VPD_KNEE_KPA))
+    gs_mol *= max(0.02, water_stress)
+    gc = max(1e-5, gs_mol * PM_MOL_TO_M_S * lai_lit)        # m/s
+    es = 0.6108 * math.exp(17.27 * temp_c / (temp_c + 237.3))
+    delta = 4098.0 * es / (temp_c + 237.3) ** 2             # kPa/°C
+    gamma = 0.0666                                          # kPa/°C a nivel del mar
+    rho_cp = 101.3 / (0.287 * (temp_c + 273.15)) * 1.013    # kJ/m³/K
+    adv = rho_cp * max(0.0, vpd_kpa) * aero_cond_m_s * 1000.0 * f_int   # W/m²
+    lam_e = (delta * rn + adv) / (delta + gamma * (1.0 + aero_cond_m_s / gc))
+    liters_m2_s = max(0.0, lam_e) / 2.45e6
+    return liters_m2_s * footprint_m2 * 1000.0 * 60.0       # mL/min por planta
+
+
 # Evaporación directa del sustrato descubierto (≈2 L/m²/día con luces ON).
 K_EVAP_DAY = 1.85
 K_EVAP_NIGHT = 0.55
@@ -635,7 +676,8 @@ class GreenhousePlantPhysics:
         return True
 
     def step(self, dt_seconds, is_day, vpd, temp, pump_active, solution, light_exposure,
-             fase_global=None, photoperiod_hours=18.0):
+             fase_global=None, photoperiod_hours=18.0, ppfd=0.0, co2_ppm=400.0,
+             footprint_m2=0.25, aero_cond_m_s=0.02):
         dt_min = dt_seconds / 60.0
         dt_hours = dt_seconds / 3600.0
         
@@ -731,15 +773,15 @@ class GreenhousePlantPhysics:
         # cuando el dosel cubre la maceta.
         vpd_factor = max(0.2, min(1.6, vpd / 1.1))
         leaf_m2 = self.biology.leaf_area_m2
-        et_trans = (K_TRANSP_DAY if is_day else K_TRANSP_NIGHT) * leaf_m2 * light_exposure * vpd_factor
+        vwc_root_now = self.vwc_root
+        water_stress = 1.0 if vwc_root_now >= 25.0 else max(0.05, (vwc_root_now - self.vwc_pmp) / 10.0)
+        et_trans = transpiration_ml_min(leaf_m2, footprint_m2, ppfd * light_exposure, vpd, temp,
+                                        co2_ppm, aero_cond_m_s, is_day, water_stress)
         pot_area_m2 = pot_surface_area_m2(self.pot_ml)
-        canopy_cover = 1.0 - math.exp(-0.5 * leaf_m2 / pot_area_m2)
+        canopy_cover = 1.0 - math.exp(-PM_K_EXT * leaf_m2 / max(0.01, footprint_m2))
         et_evap = ((K_EVAP_DAY if is_day else K_EVAP_NIGHT) * pot_area_m2 * (1.0 - canopy_cover)
                    * vpd_factor * min(1.0, self.vwc / max(1.0, 0.8 * self.vwc_cc)))
-        et_rate = et_trans + et_evap
-        vwc_root = self.vwc_root
-        if vwc_root < 25.0:
-            et_rate *= max(0.05, (vwc_root - self.vwc_pmp) / 10.0)
+        et_rate = et_trans + et_evap * (water_stress if et_evap > 0 else 1.0)
 
         et_loss = min(self.W * 0.8, max(0.0, et_rate * dt_min))
         # Solo el agua transpirada arrastra sales a la planta; la evaporada las deja.
@@ -818,6 +860,8 @@ class GreenhouseEnvironment:
         self.target_rh_night = 55.0
         self.light_dimmer_pct = 100.0
         self.ppfd_max = 950
+        self.plant_footprint_m2 = 0.25      # área de suelo por planta (50 cm × 50 cm)
+        self.aero_conductance_m_s = 0.02    # conductancia aerodinámica del dosel (ventilación)
         
         self.air_temp = 25.0
         self.air_rh = 60.0
@@ -1385,7 +1429,11 @@ class GreenhouseEnvironment:
                 solution=solution,
                 light_exposure=light_exposure,
                 fase_global=fase_global,
-                photoperiod_hours=photoperiod_hours
+                photoperiod_hours=photoperiod_hours,
+                ppfd=self.current_ppfd,
+                co2_ppm=self.co2_ppm,
+                footprint_m2=self.plant_footprint_m2,
+                aero_cond_m_s=self.aero_conductance_m_s
             )
 
         # Automatización opcional del invernadero, distinta del firmware de
