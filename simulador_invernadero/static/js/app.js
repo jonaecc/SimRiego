@@ -500,6 +500,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // P1
         document.getElementById('cfg_pot_volume_ml').value = cfg.pot_volume_ml;
         document.getElementById('cfg_substrate_type').value = latestState.plant_focus.substrate_type;
+        document.getElementById('cfg_sensor_z0').value = cfg.sensor_z0_pct;
+        document.getElementById('cfg_sensor_z1').value = cfg.sensor_z1_pct;
         if (latestState) renderCcStatus(latestState.plant_focus, cfg);
         document.getElementById('cfg_p1_vwc_min').value = cfg.p1_vwc_min;
         document.getElementById('cfg_p1_ec_target').value = cfg.p1_ec_target;
@@ -526,6 +528,8 @@ document.addEventListener('DOMContentLoaded', () => {
             p1_vwc_min: parseFloat(document.getElementById('cfg_p1_vwc_min').value),
             p1_ec_target: parseFloat(document.getElementById('cfg_p1_ec_target').value),
             pot_volume_ml: parseFloat(document.getElementById('cfg_pot_volume_ml').value),
+            sensor_z0_pct: parseFloat(document.getElementById('cfg_sensor_z0').value),
+            sensor_z1_pct: parseFloat(document.getElementById('cfg_sensor_z1').value),
             p1_shot_pc: parseFloat(document.getElementById('cfg_p1_shot_pc').value),
             p1_tiempo_entre_min: parseInt(document.getElementById('cfg_p1_tiempo_entre').value),
             p1_runoff_max: parseFloat(document.getElementById('cfg_p1_runoff_max').value),

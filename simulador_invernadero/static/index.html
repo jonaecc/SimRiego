@@ -115,7 +115,7 @@
                     <span id="cropHeight" class="kpi-val">5.0 cm</span>
                 </div>
                 <div class="kpi-row">
-                    <span class="kpi-label" title="El sensor mide la capa superior; el agua baja por gravedad y se acumula abajo.">VWC arriba / abajo:</span>
+                    <span class="kpi-label" title="Sensor (zona configurable) / mitad inferior. El agua baja por Richards y se acumula abajo (nivel colgante).">VWC arriba / abajo:</span>
                     <span id="cropVwcLayers" class="kpi-val">-- / --</span>
                 </div>
                 <div class="kpi-row">
@@ -440,6 +440,14 @@
                                 <option value="TURBA">Turba</option>
                                 <option value="SUELO">Suelo</option>
                             </select>
+                        </div>
+                        <div class="field-item">
+                            <label title="Profundidad del sensor de VWC/EC como % de la altura de la maceta, medida desde arriba. Lee el promedio entre ambos límites.">SENSOR: DESDE [% profundidad]</label>
+                            <input type="number" step="5" min="0" max="90" id="cfg_sensor_z0">
+                        </div>
+                        <div class="field-item">
+                            <label>SENSOR: HASTA [% profundidad]</label>
+                            <input type="number" step="5" min="10" max="100" id="cfg_sensor_z1">
                         </div>
                     </div>
 

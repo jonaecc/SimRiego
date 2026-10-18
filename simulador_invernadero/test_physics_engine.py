@@ -52,10 +52,11 @@ class AutomaticIrrigationTests(unittest.TestCase):
         self.assertTrue(self.env.pump_p1, "El salvataje P3 comparte Bomba P1 en el firmware")
 
     def test_tray_capacity_is_configurable_and_blocks_irrigation(self):
-        self.env.update_plant_config(0, {"capacidad_bandeja_ml": 100.0})
-        self.assertEqual(self.plant.config.capacidad_bandeja_ml, 100.0)
-        self.plant.W = self.plant.W_cc + 300.0
-        self.plant.step(60.0, True, 1.0, 25.0, False, self.env.solution_p1, 1.0)
+        self.env.update_plant_config(0, {"capacidad_bandeja_ml": 20.0})
+        self.assertEqual(self.plant.config.capacidad_bandeja_ml, 20.0)
+        self.plant.col.theta = [0.79] * self.plant.col.n     # maceta saturada: drena a la bandeja
+        for _ in range(3):
+            self.plant.step(60.0, True, 1.0, 25.0, False, self.env.solution_p1, 1.0)
         self.assertTrue(self.plant.inundacion_critica)
         self.env.empty_tray_manually(0)
         self.env.tare_tray(0)
@@ -64,7 +65,7 @@ class AutomaticIrrigationTests(unittest.TestCase):
 
     def test_flood_blocks_all_irrigation_then_clears_when_sensor_is_safe_and_valve_is_closed(self):
         self.env.sim_time_seconds = 8 * 3600.0  # pasado el P0 posterior al encendido
-        self.env.update_plant_config(0, {"capacidad_bandeja_ml": 100.0})
+        self.env.update_plant_config(0, {"capacidad_bandeja_ml": 20.0})
         self.plant.tray_ml = 120.0
         self.plant.W = self.plant.pot_ml * 0.30
         other = self.env.plants[1]
@@ -155,7 +156,8 @@ class AutomaticIrrigationTests(unittest.TestCase):
         self.assertTrue(self.env.set_substrate(0, "COCO"))
         coco_retained = self.plant.config.p1_vol_cc
         self.assertTrue(self.env.set_substrate(0, "SUELO"))
-        self.assertEqual(self.plant.vwc_cc, 45.0)
+        self.assertEqual(self.plant.cc_source, "model")
+        self.assertAlmostEqual(self.plant.vwc_cc, self.plant.col.capacity_sensor_vwc())
         self.assertLess(self.plant.config.p1_vol_cc, coco_retained)
 
     def test_configurable_p0_blocks_before_its_end_then_allows_p1(self):
@@ -174,11 +176,11 @@ class AutomaticIrrigationTests(unittest.TestCase):
         self.env.update_solution("P2", {"ec": 3.0, "ph": 6.3, "n": 180, "p": 70, "k": 280})
 
         self.env.trigger_shot(0, duration_seconds=120.0)  # Manual = Bomba P1, como firmware
-        before_ec, before_ph = self.plant.ec, self.plant.ph
+        before_ec, before_ph = self.plant.col.ec_layers()[0], self.plant.ph
         self.env.step(0.05)
         self.assertTrue(self.env.pump_p1)
         self.assertGreater(self.plant.total_irrigation_ml, 0.0)
-        self.assertLess(self.plant.ec, before_ec)
+        self.assertLess(self.plant.col.ec_layers()[0], before_ec)   # el goteo moja la capa superior
         self.assertLess(self.plant.ph, before_ph)
 
         self.env.close_all_valves()
@@ -196,7 +198,7 @@ class AutomaticIrrigationTests(unittest.TestCase):
     def test_p2_hysteresis_stacks_shots_from_floor_up_to_max(self):
         """Tras tocar el piso, P2 sigue disparando (1 por intervalo) hasta el máximo."""
         self.env.set_management_stage(0, "CRECIMIENTO", update_env=True)
-        self.env.update_plant_config(0, {"p2_vwc_min": 40.0, "p2_vwc_max": 59.0})
+        self.env.update_plant_config(0, {"p2_vwc_min": 40.0, "p2_vwc_max": 52.0})
         self.env.time_speed = 1.0
         self.env.sim_time_seconds = 10.99 * 3600
         self.plant.W = self.plant.pot_ml * 0.405
@@ -211,8 +213,8 @@ class AutomaticIrrigationTests(unittest.TestCase):
             was = act
             vwc_max = max(vwc_max, self.plant.vwc)
         self.assertGreater(shots, 3, "debe apilar varios disparos, no uno por descenso al piso")
-        self.assertGreater(vwc_max, 55.0, "debe subir hacia el máximo configurado")
-        self.assertLessEqual(vwc_max, 59.5, "no debe pasarse del máximo (corte en pleno riego)")
+        self.assertGreater(vwc_max, 48.0, "debe subir hacia el máximo configurado")
+        self.assertLessEqual(vwc_max, 52.5, "no debe pasarse del máximo (corte en pleno riego)")
 
     def test_ec_targets_and_substrate_ph_are_configurable(self):
         self.env.update_plant_config(0, {"p1_ec_target": 3.1, "p2_ec_target": 2.8, "substrate_ph": 6.2})
@@ -299,7 +301,8 @@ class EvapotranspirationTests(unittest.TestCase):
             self.assertAlmostEqual(v, expected, delta=0.08 * expected)
 
 
-class TwoLayerPotTests(unittest.TestCase):
+class PotColumnTests(unittest.TestCase):
+    """Columna de sustrato: Richards (van Genuchten) con drenaje por cara de filtración."""
     def setUp(self):
         self.env = GreenhouseEnvironment()
         self.p = self.env.plants[0]
@@ -310,42 +313,112 @@ class TwoLayerPotTests(unittest.TestCase):
         for _ in range(int(minutes * 12)):
             self.p.step(5.0, is_day, 1.1, 25.0, False, self.sol, 1.0)
 
-    def test_sensor_peak_after_irrigation_settles_as_water_moves_down(self):
+    def test_water_moves_down_after_irrigation_and_sensor_peak_settles(self):
         p = self.p
-        p.W_t = p.vol_top_ml * 0.66
-        p.W_b = p.vol_bottom_ml * 0.40
-        top0, bot0 = p.vwc, p.vwc_bottom
+        p.fill_uniform(30.0, 2.0)
+        p.col.theta[0] = 0.70               # pico tras un disparo en la capa superior
+        p.col.theta[1] = 0.55
+        top0, bot0 = p.col.theta[0], sum(p.col.theta[6:])
         self._run(60, is_day=False)
-        self.assertLess(p.vwc, top0 - 3.0, "el sensor debe caer tras el pico por redistribución")
-        self.assertGreater(p.vwc_bottom, bot0 + 3.0, "la capa inferior debe ganar el agua que baja")
+        self.assertLess(p.col.theta[0], top0 - 0.05, "la capa superior debe vaciarse hacia abajo")
+        self.assertGreater(sum(p.col.theta[6:]), bot0, "las capas inferiores ganan el agua que baja")
 
-    def test_no_tray_runoff_until_the_bottom_layer_is_saturated(self):
+    def test_no_tray_runoff_until_the_bottom_is_saturated(self):
         p = self.p
-        p.W_t = p.vol_top_ml * 0.66
-        p.W_b = p.vol_bottom_ml * 0.30
+        p.fill_uniform(30.0, 2.0)
+        p.col.theta[:6] = [0.66] * 6
         self._run(30, is_day=False)
         self.assertEqual(p.tray_ml, 0.0)
 
     def test_saturated_pot_drains_to_the_tray(self):
         p = self.p
-        p.W_t = p.vol_top_ml * 0.66
-        p.W_b = p.vol_bottom_ml * 0.70
-        self._run(60, is_day=False)
+        p.col.theta = [0.79] * p.col.n
+        self._run(30, is_day=False)
         self.assertGreater(p.tray_ml, 0.0)
+
+    def test_free_drainage_ends_at_the_hydrostatic_container_capacity(self):
+        p = self.p
+        p.col.theta = [0.79] * p.col.n
+        for _ in range(8 * 12 * 60):          # 8 h sin riego ni luz
+            self.p.step(5.0, False, 0.1, 22.0, False, self.sol, 0.0, ppfd=0.0)
+        eq = p.col.equilibrium_theta()
+        for got, want in zip(p.col.theta, eq):
+            self.assertAlmostEqual(got, want, delta=0.025)
+        self.assertGreater(p.vwc_bottom, p.vwc, "el agua colgante deja más agua abajo que arriba")
+        self.assertAlmostEqual(p.W, p.W_cc, delta=0.03 * p.W_cc)
+
+    def test_taller_pots_hold_less_water_per_volume_at_capacity(self):
+        from substrate import PotColumn
+        short, tall = PotColumn(500.0), PotColumn(15000.0)
+        self.assertGreater(short.capacity_ml() / 500.0, tall.capacity_ml() / 15000.0)
+
+    def test_water_and_salt_are_conserved_through_shots_and_drainage(self):
+        p = self.p
+        p.fill_uniform(45.0, 2.0)
+        w0, s0 = p.W, p.S
+        inflow0, drain0 = p.total_irrigation_ml, p.total_drain_ml
+        strong = NutrientSolution(ec=6.0)
+        for k in range(12 * 60 * 3):
+            p.valve_cmd = p.valve_open = (k // 12) % 60 < 10        # 10 min de goteo por hora
+            p.step(5.0, False, 0.1, 22.0, True, strong, 0.0, ppfd=0.0)
+        self.assertAlmostEqual(p.W, w0 + (p.total_irrigation_ml - inflow0) - (p.total_drain_ml - drain0), delta=0.5)
+        self.assertGreater(p.total_drain_ml - drain0, 0.0)
+        in_salt = (p.total_irrigation_ml - inflow0) * 6.0
+        out_salt = p.col.salt_total - s0
+        self.assertGreater(p.S, s0 * 0.5)      # sin extracción radicular de sal en la oscuridad con ET≈0
+        self.assertLess(out_salt, in_salt)
 
     def test_top_dries_faster_than_bottom_under_light(self):
         p = self.p
         p.biology.biomass_g = 60.0
-        p.W = p.pot_ml * 0.52
+        p.fill_uniform(52.0, 2.0)
         self._run(180)
-        self.assertLess(p.vwc, p.vwc_bottom - 0.5)
+        self.assertLess(p.col.theta[0], p.col.theta[-1] - 0.005)
 
-    def test_setting_total_water_keeps_both_layers_consistent(self):
+    def test_setting_total_water_scales_a_uniform_profile(self):
         p = self.p
+        p.fill_uniform(38.0, 2.0)
         p.W = p.pot_ml * 0.30
-        self.assertAlmostEqual(p.vwc, 30.0, places=3)
-        self.assertAlmostEqual(p.vwc_bottom, 30.0, places=3)
-        self.assertAlmostEqual(p.vwc_mean, 30.0, places=3)
+        for v in (p.vwc, p.vwc_bottom, p.vwc_mean):
+            self.assertAlmostEqual(v, 30.0, places=3)
+
+    def test_sensor_reads_the_configured_depth_zone(self):
+        p = self.p
+        p.fill_uniform(30.0, 2.0)
+        p.col.theta[0] = 0.75
+        shallow = p.vwc
+        p.col.sensor_z0, p.col.sensor_z1 = 0.0, 0.2
+        self.assertGreater(p.vwc, shallow)
+
+    def test_sensor_zone_is_configurable_and_moves_the_derived_capacity(self):
+        p = self.p
+        cc0 = p.vwc_cc
+        self.env.update_plant_config(0, {"sensor_z0_pct": 0, "sensor_z1_pct": 20})
+        self.assertEqual((p.col.sensor_z0, p.col.sensor_z1), (0.0, 0.2))
+        self.assertLess(p.vwc_cc, cc0, "arriba el sustrato retiene menos: un sensor superficial lee menos en CC")
+        self.env.update_plant_config(0, {"sensor_z0_pct": None, "sensor_z1_pct": None})   # entradas vacías: sin efecto
+        self.assertEqual((p.col.sensor_z0, p.col.sensor_z1), (0.0, 0.2))
+
+    def test_transplant_keeps_the_water_profile_and_salts(self):
+        p = self.p
+        p.fill_uniform(40.0, 2.5)
+        p.col.theta[0] = 0.6
+        v0, ec0 = p.vwc, p.ec
+        self.env.update_plant_config(0, {"pot_volume_ml": 15000})
+        self.assertAlmostEqual(p.vwc, v0, places=6)
+        self.assertAlmostEqual(p.ec, ec0, places=6)
+        self.assertAlmostEqual(p.W, 15000 * p.vwc_mean / 100.0, places=3)
+
+    def test_dry_coir_wets_from_the_top(self):
+        p = self.p
+        p.fill_uniform(20.0, 2.0)
+        sol = NutrientSolution(ec=2.0)
+        p.valve_cmd = p.valve_open = True
+        for _ in range(12 * 8):               # 8 min de goteo
+            p.step(5.0, False, 0.1, 22.0, True, sol, 0.0, ppfd=0.0)
+        self.assertGreater(p.col.theta[0], 0.45)
+        self.assertLess(p.col.theta[-1], 0.21)
+        self.assertEqual(p.tray_ml, 0.0)
 
 
 class CropPlanTests(unittest.TestCase):

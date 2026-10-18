@@ -49,11 +49,12 @@ O simplemente haz doble clic en `iniciar_simulador.bat`. Se abrirá automáticam
 
 ## 🔬 Modelado Físico y Biológico Implementado
 
-1. **Dinámica del Sustrato (`physics_engine.py`)**:
-   - $W$: Volumen de agua en sustrato [ml] ($VWC = 100 \cdot W / V_{maceta}$).
-   - $S$: Concentración de sales minerales ($EC = S / W$).
-   - Capacidad de Campo ($CC = 46\%$): El agua que supera este umbral drena hacia la bandeja arrastrando sales a la EC de saturación.
-   - Evapotranspiración ($ET$): Transpiración diurna y nocturna dinámica basada en área foliar, biomasa y VPD.
+1. **Dinámica del Sustrato (`substrate.py`)**:
+   - La maceta es una columna de 12 capas. El agua se mueve por la ecuación de Richards con retención van Genuchten-Mualem (esquema implícito, conserva masa). El goteo entra por arriba y el fondo es una cara de filtración: solo drena cuando la capa inferior alcanza la presión del orificio.
+   - La **capacidad de contenedor** y su gradiente vertical (agua colgante) salen de la curva y de la altura de la maceta; ya no es un número fijo. El ensayo CC del firmware virtual la mide como lo haría el real.
+   - Las sales (EC·mL por capa) viajan con el agua; la evaporación las deja y la raíz absorbe una fracción. El sensor lee el promedio de una zona de profundidad configurable.
+   - Solo el coco tiene una curva de referencia (aproximada); rockwool, turba y suelo son ilustrativos y deben calibrarse con mediciones.
+   - Evapotranspiración: Penman-Monteith del dosel (PPFD, VPD, ventilación, área foliar); la raíz extrae por capa según su distribución y la tensión.
 
 2. **Crecimiento Vegetal Procedural 3D**:
    - **Plántula (Días 1-10)**: Estructura pequeña, raíces incipientes.
