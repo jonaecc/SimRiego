@@ -293,6 +293,12 @@
                     <input type="range" id="sliderLight" min="0" max="100" step="5" value="100">
                 </div>
 
+                <div class="modal-grid">
+                    <div class="field-item"><label>PPFD máx. dosel [µmol/m²/s]</label><input type="number" id="inPpfdMax" min="0" max="3000" step="50" value="950"></div>
+                    <div class="field-item"><label>Área por planta [m²]</label><input type="number" id="inFootprint" min="0.05" max="4" step="0.05" value="0.25"></div>
+                    <div class="field-item"><label>Ventilación gₐ [m/s]</label><input type="number" id="inAeroCond" min="0.002" max="0.5" step="0.005" value="0.02"></div>
+                </div>
+
                 <div class="kpi-row" style="margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 6px;">
                     <span class="kpi-label">Temp Actual: <b id="kpiTemp" style="color:#fff;">25.0°C</b></span>
                     <span class="kpi-label">HR: <b id="kpiRH" style="color:#fff;">60%</b></span>

@@ -423,6 +423,14 @@ document.addEventListener('DOMContentLoaded', () => {
         sendCmd({ cmd: 'set_climate', light_dimmer: e.target.value });
     });
 
+    [['inPpfdMax', 'ppfd_max'], ['inFootprint', 'footprint_m2'], ['inAeroCond', 'aero_cond']].forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', (ev) => {
+            const v = parseFloat(ev.target.value);
+            if (!isNaN(v)) sendCmd({ cmd: 'set_climate', [key]: v });
+        });
+    });
+
     // 5. MODAL DE CONFIGURACIÓN DE RIEGO (P1 / P2 / P3)
     const modalConfig = document.getElementById('modalConfig');
     const btnOpenConfig = document.getElementById('btnOpenConfig');
