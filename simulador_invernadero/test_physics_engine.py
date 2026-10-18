@@ -1,7 +1,8 @@
 """Pruebas de regresión del gemelo digital (sin navegador ni hardware)."""
 import unittest
 
-from physics_engine import GreenhouseEnvironment, NutrientSolution, transpiration_ml_min
+from physics_engine import (GreenhouseEnvironment, NutrientSolution, PlantBiology, CARBON_DEFAULTS,
+                            canopy_photosynthesis_umol, transpiration_ml_min)
 
 
 class InitialStateTests(unittest.TestCase):
@@ -238,10 +239,11 @@ class EvapotranspirationTests(unittest.TestCase):
         small, big = env.plants[0], env.plants[1]
         for p in (small, big):
             env.update_plant_config(p.id, {"pot_volume_ml": 5000})
+        big.biology.sync_to_stage("CRECIMIENTO")   # reparto de órgano de una planta vegetativa
         small.biology.biomass_g, big.biology.biomass_g = 5.0, 100.0
         et_small, et_big = self._daily_et_ml(small), self._daily_et_ml(big)
         self.assertGreater(et_big, 5.0 * et_small)
-        self.assertTrue(450.0 < et_big < 1100.0, f"planta vegetativa de 100 g: {et_big:.0f} mL/día")
+        self.assertTrue(450.0 < et_big < 1250.0, f"planta vegetativa de 100 g: {et_big:.0f} mL/día")
 
     def test_seedling_uses_a_small_fraction_of_its_pot_per_day(self):
         env = GreenhouseEnvironment()
@@ -277,7 +279,7 @@ class EvapotranspirationTests(unittest.TestCase):
             bio.biomass_g = grams
             areas.append(bio.leaf_area_m2)
         self.assertEqual(areas, sorted(areas))
-        self.assertLess(areas[0], 0.02)
+        self.assertLess(areas[0], 0.03)
         self.assertGreater(areas[-1], 1.0)
 
     def test_shot_volume_does_not_depend_on_the_time_step(self):
@@ -488,3 +490,115 @@ class SaltTransportTests(unittest.TestCase):
         p.biology.biomass_g = 0.1
         p.step(600.0, False, 0.2, 20.0, False, env.solution_p2, 0.0)
         self.assertAlmostEqual(p.S, s0, delta=s0 * 0.02)
+
+
+
+def _grow(bio, days, photoperiod=18.0, ppfd=950.0, temp=25.5, co2=400.0, flip_day=None):
+    """Hace crecer una planta en condiciones sin estrés (pasos de 6 min)."""
+    dt = 0.1
+    for d in range(days):
+        ph = 12.0 if (flip_day is not None and d >= flip_day) else photoperiod
+        for i in range(240):
+            on = i * dt < ph
+            bio.update_growth(dt, 40.0, 2.0, 6.0, 200.0, 60.0, 250.0, 1.2, temp, 1.0, pot_ml=15000.0,
+                              photoperiod_hours=ph, ppfd=ppfd if on else 0.0, co2_ppm=co2, footprint_m2=0.25)
+    return bio
+
+
+class CarbonBalanceTests(unittest.TestCase):
+    def test_canopy_photosynthesis_saturates_with_light_and_lai(self):
+        p = CARBON_DEFAULTS
+        self.assertEqual(canopy_photosynthesis_umol(0.0, 3.0, 25.0, 400.0, p), 0.0)
+        a = [canopy_photosynthesis_umol(i, 3.0, 25.0, 400.0, p) for i in (200, 600, 1000, 1500)]
+        self.assertEqual(a, sorted(a))
+        self.assertLess(a[3] - a[2], a[1] - a[0])          # rendimientos decrecientes
+        l = [canopy_photosynthesis_umol(950.0, x, 25.0, 400.0, p) for x in (0.5, 2.0, 4.0, 8.0)]
+        self.assertEqual(l, sorted(l))
+        self.assertLess(l[3] - l[2], l[1] - l[0])
+
+    def test_co2_and_temperature_responses(self):
+        p = CARBON_DEFAULTS
+        base = canopy_photosynthesis_umol(950.0, 3.0, 26.0, 400.0, p)
+        self.assertGreater(canopy_photosynthesis_umol(950.0, 3.0, 26.0, 750.0, p), 1.2 * base)
+        self.assertLess(canopy_photosynthesis_umol(950.0, 3.0, 26.0, 250.0, p), 0.8 * base)
+        self.assertLess(canopy_photosynthesis_umol(950.0, 3.0, 38.0, 400.0, p), base)
+        self.assertLess(canopy_photosynthesis_umol(950.0, 3.0, 14.0, 400.0, p), base)
+
+    def test_leaf_area_is_leaf_mass_over_specific_leaf_weight(self):
+        b = PlantBiology()
+        b.leaf_g = 90.0
+        self.assertAlmostEqual(b.leaf_area_m2, 90.0 / CARBON_DEFAULTS["slw"], places=6)
+        b.params["slw"] = 30.0
+        self.assertAlmostEqual(b.leaf_area_m2, 3.0, places=6)
+
+    def test_no_light_means_no_growth(self):
+        b = PlantBiology()
+        b.sync_to_stage("CRECIMIENTO")
+        m0 = b.biomass_g
+        _grow(b, 3, ppfd=0.0)
+        self.assertLessEqual(b.biomass_g, m0)
+
+    def test_carbon_mass_balance(self):
+        b = PlantBiology()
+        b.sync_to_stage("CRECIMIENTO")
+        m0 = b.biomass_g
+        _grow(b, 5)
+        gained = b.biomass_g - m0 + b.litter_g
+        expected = b.params["yg"] * (b.gpp_total_g - b.resp_total_g - b.reserve_g)
+        self.assertAlmostEqual(gained, expected, delta=0.02 * expected)
+
+    def test_vegetative_light_use_efficiency_is_in_the_measured_range(self):
+        b = PlantBiology()
+        b.sync_to_stage("CRECIMIENTO")
+        _grow(b, 6)
+        s0, par0 = b.shoot_g, b.par_total_mol
+        _grow(b, 6)
+        rue = (b.shoot_g - s0) / 0.25 / ((b.par_total_mol - par0) / 0.25)   # g aéreo / mol incidente
+        self.assertTrue(0.15 < rue < 0.40, f"RUE aérea {rue:.2f} g/mol")
+
+    def test_vegetative_canopy_stays_in_a_realistic_lai_band(self):
+        b = PlantBiology()
+        b.sync_to_stage("CRECIMIENTO")
+        _grow(b, 25)
+        lai = b.leaf_area_m2 / 0.25
+        self.assertTrue(2.0 < lai < 6.0, f"LAI {lai:.1f}")
+        self.assertEqual(b.flower_g, 0.0)
+
+    def test_flowering_partitions_carbon_to_flowers_and_ends_with_a_plausible_harvest_index(self):
+        b = PlantBiology()
+        b.sync_to_stage("CRECIMIENTO")
+        _grow(b, 14)
+        self.assertFalse(b.flower_induced)
+        _grow(b, 70, flip_day=0)
+        self.assertTrue(b.flower_induced)
+        self.assertTrue(0.40 < b.harvest_index < 0.75, f"HI {b.harvest_index:.2f}")
+        yield_m2 = b.flower_g / 0.25
+        self.assertTrue(116.0 < yield_m2 < 519.0, f"rendimiento {yield_m2:.0f} g/m²")
+        self.assertGreater(b.leaf_senescence, 0.1)
+
+    def test_root_fraction_falls_after_the_photoperiod_switch(self):
+        b = PlantBiology()
+        b.sync_to_stage("CRECIMIENTO")
+        veg = b._partition(0.0, False)[0]
+        b.flower_induced, b.flower_induction_day, b.age_days = True, 20.0, 40.0
+        self.assertLess(b._partition(0.0, False)[0], 0.5 * veg + 1e-9)
+        # y con sequía la raíz recibe más carbono
+        self.assertGreater(b._partition(1.0, False)[0], b._partition(0.0, False)[0])
+
+    def test_carbon_params_are_manual_and_validated(self):
+        env = GreenhouseEnvironment()
+        applied = env.set_carbon_params({"amax": 14.0, "slw": "40", "nope": 3, "yg": -1, "alpha": float("nan")})
+        self.assertEqual(applied, ["amax", "slw"])
+        for p in env.plants:
+            self.assertEqual(p.biology.params["amax"], 14.0)
+            self.assertEqual(p.biology.params["slw"], 40.0)
+            self.assertEqual(p.biology.params["yg"], CARBON_DEFAULTS["yg"])
+        self.assertEqual(CARBON_DEFAULTS["amax"], 11.0)       # los defaults globales no se tocan
+
+    def test_irrigation_stage_does_not_change_biological_stage_or_carbon(self):
+        env = GreenhouseEnvironment()
+        p = env.plants[0]
+        before = (p.biology.biomass_g, p.biology.leaf_g, p.biology.stage)
+        self.assertIsNotNone(p.advance_stage("CRECIMIENTO"))
+        self.assertEqual(before, (p.biology.biomass_g, p.biology.leaf_g, p.biology.stage))
+        self.assertFalse(p.biology.flower_induced)

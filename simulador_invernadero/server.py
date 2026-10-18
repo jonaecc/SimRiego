@@ -80,6 +80,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     if "ppfd_max" in msg: env.ppfd_max = max(0.0, min(3000.0, float(msg["ppfd_max"])))
                     if "footprint_m2" in msg: env.plant_footprint_m2 = max(0.05, min(4.0, float(msg["footprint_m2"])))
                     if "aero_cond" in msg: env.aero_conductance_m_s = max(0.002, min(0.5, float(msg["aero_cond"])))
+                elif cmd == "set_carbon":
+                    env.set_carbon_params(msg.get("params", {}))
                 elif cmd == "update_solution":
                     env.update_solution(msg.get("pump", "P1"), msg.get("solution", {}))
                 elif cmd == "select_plant":

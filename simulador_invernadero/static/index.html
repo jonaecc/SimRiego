@@ -127,6 +127,14 @@
                     <span id="cropBiomass" class="kpi-val">2.0 g</span>
                 </div>
                 <div class="kpi-row">
+                    <span class="kpi-label" title="Masa seca por órgano. El reparto del carbono nuevo depende de los días desde el cambio 12/12.">Hoja / tallo / raíz / flor:</span>
+                    <span id="cropOrgans" class="kpi-val">-- g</span>
+                </div>
+                <div class="kpi-row">
+                    <span class="kpi-label" title="Índice de área foliar y fotosíntesis neta del dosel.">LAI · A dosel:</span>
+                    <span id="cropCarbon" class="kpi-val">--</span>
+                </div>
+                <div class="kpi-row">
                     <span class="kpi-label">Salud radicular:</span>
                     <span id="cropRootHealth" class="kpi-val">100%</span>
                 </div>
@@ -297,6 +305,12 @@
                     <div class="field-item"><label>PPFD máx. dosel [µmol/m²/s]</label><input type="number" id="inPpfdMax" min="0" max="3000" step="50" value="950"></div>
                     <div class="field-item"><label>Área por planta [m²]</label><input type="number" id="inFootprint" min="0.05" max="4" step="0.05" value="0.25"></div>
                     <div class="field-item"><label>Ventilación gₐ [m/s]</label><input type="number" id="inAeroCond" min="0.002" max="0.5" step="0.005" value="0.02"></div>
+                </div>
+                <div class="modal-grid">
+                    <div class="field-item"><label title="Fotosíntesis saturada efectiva del dosel">Amax dosel [µmol CO₂/m²/s]</label><input type="number" id="inAmax" min="1" max="60" step="0.5" value="11"></div>
+                    <div class="field-item"><label title="Rendimiento cuántico">α [mol CO₂/mol fotón]</label><input type="number" id="inAlpha" min="0.01" max="0.12" step="0.002" value="0.06"></div>
+                    <div class="field-item"><label title="Peso específico foliar: área = masa foliar / SLW">SLW [g/m²]</label><input type="number" id="inSlw" min="10" max="120" step="1" value="45"></div>
+                    <div class="field-item"><label title="Eficiencia de crecimiento">Yg [g/g CH₂O]</label><input type="number" id="inYg" min="0.3" max="0.95" step="0.01" value="0.7"></div>
                 </div>
 
                 <div class="kpi-row" style="margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 6px;">

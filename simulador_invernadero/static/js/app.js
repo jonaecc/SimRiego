@@ -200,6 +200,10 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('cropBiomass').textContent = `${p.biomass_g} g`;
         const layersEl = document.getElementById('cropVwcLayers');
         if (layersEl) layersEl.textContent = `${p.vwc} / ${p.vwc_bottom} %`;
+        const orgEl = document.getElementById('cropOrgans');
+        if (orgEl) orgEl.textContent = `${p.leaf_mass_g} / ${p.stem_mass_g} / ${p.root_mass_g} / ${p.flower_mass_g} g`;
+        const carEl = document.getElementById('cropCarbon');
+        if (carEl) carEl.textContent = `${p.lai} · ${p.a_canopy_umol} µmol/m²/s`;
         const leafEl = document.getElementById('cropLeafArea');
         if (leafEl) leafEl.textContent = `${p.leaf_area_m2} m²`;
         document.getElementById('cropRootHealth').textContent = `${p.root_health_pct}%`;
@@ -428,6 +432,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (el) el.addEventListener('change', (ev) => {
             const v = parseFloat(ev.target.value);
             if (!isNaN(v)) sendCmd({ cmd: 'set_climate', [key]: v });
+        });
+    });
+
+    [['inAmax', 'amax'], ['inAlpha', 'alpha'], ['inSlw', 'slw'], ['inYg', 'yg']].forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', (ev) => {
+            const v = parseFloat(ev.target.value);
+            if (!isNaN(v) && v > 0) sendCmd({ cmd: 'set_carbon', params: { [key]: v } });
         });
     });
 

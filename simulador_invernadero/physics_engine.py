@@ -253,29 +253,106 @@ def pot_surface_area_m2(pot_ml):
     return math.pi * (d_cm / 2.0) ** 2 / 10000.0
 
 
+# ── Balance de carbono (fase 2) ─────────────────────────────────────────────
+# Todos los parámetros son MANUALES: los valores por defecto salen de la
+# literatura (ver documento de investigación) y no cambian solos según el
+# régimen de riego ni la etapa. Los marcados "[modelo]" son valores típicos de
+# modelos de cultivo, NO medidos en cannabis, y deben calibrarse con datos reales.
+CARBON_DEFAULTS = {
+    "amax": 11.0,            # Amax EFECTIVA del dosel a 25-30 °C, 350 ppm [µmol CO2/m²/s]: calibrada para RUE aérea ≈0,26-0,30 g/mol (hoja joven expuesta medida ≈24; el promedio de dosel es menor por edad, sombra y N)
+    "alpha": 0.060,          # rendimiento cuántico [mol CO2/mol fotones] (0,058-0,068 medido, baja con la edad)
+    "k_ext": 0.6,            # coeficiente de extinción de luz (el mismo de Penman-Monteith)
+    "t_opt": 27.0,           # temperatura óptima de fotosíntesis [°C]
+    "t_width_lo": 14.0,      # ancho de la respuesta bajo el óptimo [°C]
+    "t_width_hi": 9.0,       # ancho de la respuesta sobre el óptimo [°C]
+    "lai_soft": 3.5,         # LAI desde el que las hojas bajas, sombreadas, empiezan a caer [modelo; LAI medido 2,1-4,4 a 21 d]
+    "lai_max": 6.0,          # LAI al que la caída foliar alcanza su máximo [modelo]
+    "leaf_turnover_max": 0.06,  # tasa máxima de caída foliar por autosombreo [1/día] [modelo]
+    "yg": 0.70,              # eficiencia de crecimiento (g materia seca / g CH2O) [modelo]
+    "rm_leaf": 0.030,        # mantenimiento foliar a 25 °C [g CH2O/g/día] [modelo]
+    "rm_stem": 0.015,        # mantenimiento de tallo [modelo]
+    "rm_root": 0.015,        # mantenimiento de raíz [modelo]
+    "rm_flower": 0.010,      # mantenimiento de flor [modelo]
+    "q10": 2.0,              # sensibilidad térmica de la respiración [modelo]
+    "slw": 45.0,             # peso específico foliar [g seco/m²] (35-58 medido)
+    "tau_use_days": 0.25,    # constante de tiempo con que el crecimiento consume la reserva de carbono [d] [modelo]
+    "root_frac": 0.22,       # fracción del crecimiento que va a raíz en vegetativo [modelo]
+    "leaf_frac_shoot": 0.62, # hoja / (hoja+tallo) del crecimiento aéreo vegetativo (60-63 % medido)
+    "flower_sink_max": 0.85, # máxima fracción del crecimiento aéreo destinada a flor [modelo; HI cosecha 0,56-0,73 medido]
+    "flower_start_day": 4.0, # días desde el cambio 12/12 hasta el inicio de la formación de flores
+    "flower_ramp_days": 14.0,# días en que el sumidero floral sube de 0 a su máximo
+    "root_drop_days": 14.0,  # días tras 12/12 en que cae la fracción radicular
+    "root_drop": 0.65,       # caída relativa de la fracción radicular al florecer (cae la relación raíz:parte aérea)
+    "stretch_days": 18.0,    # duración del estirón tras 12/12 [d]
+    "ripening_day": 52.0,    # día tras 12/12 en que empieza la maduración (51-81 medido según genética)
+    "senescence_start": 35.0,# día tras 12/12 en que empieza la senescencia foliar
+    "senescence_span": 70.0, # días para llegar a senescencia total
+    "ssl_cm_per_g": 3.0,     # elongación por masa de tallo [cm/g] [modelo]
+    "bud_ref_g": 70.0,       # masa de flor seca que corresponde a buds_size = 1 [g]
+}
+
+
+def canopy_photosynthesis_umol(ppfd, lai, temp_c, co2_ppm, params, stress=1.0):
+    """Asimilación bruta del dosel [µmol CO2/m² de suelo/s].
+
+    Hipérbola rectangular por hoja, A = α·I·Amax/(α·I+Amax), con luz que decae
+    exponencialmente en el dosel (Beer, I(l)=k·I0·e^(-k·l)). La integral sobre el
+    LAI tiene forma cerrada: A_c = (Amax/k)·ln[(α·k·I0+Amax)/(α·k·I0·e^(-k·L)+Amax)].
+    Amax responde a temperatura (campana asimétrica) y a CO2 (×1,5 a 750 ppm, ×0,5 a 250 ppm).
+    """
+    if ppfd <= 0.0 or lai <= 0.0 or stress <= 0.0:
+        return 0.0
+    p = params
+    width = p["t_width_lo"] if temp_c < p["t_opt"] else p["t_width_hi"]
+    f_t = math.exp(-((temp_c - p["t_opt"]) / width) ** 2)
+    if co2_ppm >= 350.0:
+        f_c = 1.0 + 0.5 * (co2_ppm - 350.0) / 400.0
+    else:
+        f_c = max(0.1, 1.0 - 0.49 * (350.0 - co2_ppm) / 100.0)
+    amax = p["amax"] * f_t * f_c * stress
+    k = p["k_ext"]
+    x0 = p["alpha"] * k * ppfd
+    x_bottom = x0 * math.exp(-k * lai)
+    return amax / k * math.log((x0 + amax) / (x_bottom + amax))
+
+
+def _smoothstep(x):
+    x = max(0.0, min(1.0, x))
+    return x * x * (3.0 - 2.0 * x)
+
+
 class PlantBiology:
-    """Modelo biológico individual con fenotipo y respuesta fisiológica."""
+    """Modelo biológico individual: balance de carbono, reparto por órgano y fenología."""
     def __init__(self, plant_id=0, strain_name="OG Kush", vigor_factor=1.0):
         self.id = plant_id
         self.strain_name = strain_name
         # Un cultivo real no mezcla autoflorecientes con fotoperiódicas. Las 12
         # plantas son FOTOPERIODICAS: solo florecen cuando la sala pasa a 12/12.
-        # (Más adelante se podrá diferenciar con "AUTOFLORECIENTE".)
         self.flowering_type = "FOTOPERIODICA"
         self.vigor_factor = vigor_factor   # Variabilidad genética natural (0.85 a 1.20)
-        
+        self.params = dict(CARBON_DEFAULTS)
+
         self.age_days = 1.0
         self.height_cm = 5.0 * vigor_factor
         self.max_height_cm = 95.0 * vigor_factor
-        self.biomass_g = 2.0 * vigor_factor
+        self._set_organs(2.0 * vigor_factor, root=0.25, leaf=0.55, stem=0.20, flower=0.0)
         self.root_health = 100.0
         self.stage = CropStage.GERMINATION
-        
+
         # Inducción floral orgánica y fotoperiodo
         self.flower_induced = False
         self.flower_induction_day = 0.0
         self.steering_type = "VEGETATIVO"
-        
+        self.leaf_senescence = 0.0
+
+        # Reserva de carbono (g CH2O) y contadores de diagnóstico acumulados
+        self.reserve_g = 0.0
+        self.litter_g = 0.0           # hojarasca acumulada
+        self.gpp_total_g = 0.0        # fotosíntesis bruta
+        self.resp_total_g = 0.0       # respiración de mantenimiento
+        self.par_total_mol = 0.0      # PAR incidente por planta (mol)
+        self.a_canopy = 0.0           # última asimilación del dosel [µmol/m²/s]
+
         # Síntomas visuales (0.0 a 1.0)
         self.leaf_droop = 0.0
         self.tip_burn = 0.0
@@ -285,25 +362,59 @@ class PlantBiology:
         self.buds_size = 0.0
         self.trichomes_amber = 0.0
 
+    # ── Órganos ─────────────────────────────────────────────────────────────
+    def _set_organs(self, total, root, leaf, stem, flower):
+        s = root + leaf + stem + flower
+        self.root_g = total * root / s
+        self.leaf_g = total * leaf / s
+        self.stem_g = total * stem / s
+        self.flower_g = total * flower / s
+
+    @property
+    def biomass_g(self):
+        """Materia seca total de la planta [g] (hoja + tallo + raíz + flor)."""
+        return self.leaf_g + self.stem_g + self.root_g + self.flower_g
+
+    @biomass_g.setter
+    def biomass_g(self, value):
+        value = max(0.0, float(value))
+        total = self.biomass_g
+        if total <= 1e-9:
+            self._set_organs(value, 0.25, 0.55, 0.20, 0.0)
+            return
+        f = value / total
+        self.root_g *= f
+        self.leaf_g *= f
+        self.stem_g *= f
+        self.flower_g *= f
+
     @property
     def leaf_area_m2(self):
-        """Área foliar [m²] (alometría): crece de forma continua con la biomasa.
+        """Área foliar [m²] = masa foliar verde / peso específico foliar (SLW)."""
+        return max(0.0, self.leaf_g * (1.0 - self.leaf_senescence) / self.params["slw"])
 
-        LA = 0.009 · B^0.95 (≈0.02 m² a 2 g, 0.18 a 24 g, 0.58 a 80 g, 2.0 a 300 g;
-        ≈0.008 m²/g en vegetativo, coherente con ~8-10 m²/kg de planta),
-        con tope por autosombreado. Reemplaza los valores escalón anteriores y es la
-        base de la transpiración: la planta transpira según su tamaño, no según la etapa.
-        """
-        return min(2.2, 0.009 * max(self.biomass_g, 0.1) ** 0.95)
+    @property
+    def shoot_g(self):
+        return self.leaf_g + self.stem_g + self.flower_g
+
+    @property
+    def harvest_index(self):
+        return self.flower_g / max(self.shoot_g, 1e-9)
+
+    @property
+    def flower_days(self):
+        return max(0.0, self.age_days - self.flower_induction_day) if self.flower_induced else 0.0
 
     def sync_to_stage(self, stage):
         """Sincroniza la morfología base (solo para resets o inicialización explícita)."""
+        p = self.params
         if stage == "PLANTULA":
             self.stage = CropStage.GERMINATION
             self.age_days = 4.0
             self.height_cm = 8.0 * self.vigor_factor
-            self.biomass_g = 2.5 * self.vigor_factor
+            self._set_organs(2.5 * self.vigor_factor, 0.25, 0.55, 0.20, 0.0)
             self.flower_induced = False
+            self.leaf_senescence = 0.0
             self.buds_size = 0.0
             self.trichomes_amber = 0.0
             self.root_health = 100.0
@@ -311,8 +422,11 @@ class PlantBiology:
             self.stage = CropStage.VEGETATIVE
             self.age_days = 22.0
             self.height_cm = 38.0 * self.vigor_factor
-            self.biomass_g = 42.0 * self.vigor_factor
+            shoot = 1.0 - p["root_frac"]
+            self._set_organs(42.0 * self.vigor_factor, p["root_frac"],
+                             shoot * p["leaf_frac_shoot"], shoot * (1.0 - p["leaf_frac_shoot"]), 0.0)
             self.flower_induced = False
+            self.leaf_senescence = 0.0
             self.buds_size = 0.0
             self.trichomes_amber = 0.0
             self.root_health = 100.0
@@ -322,106 +436,168 @@ class PlantBiology:
             self.flower_induced = True
             self.flower_induction_day = 30.0
             self.height_cm = 72.0 * self.vigor_factor
-            self.biomass_g = 105.0 * self.vigor_factor
+            total = 105.0 * self.vigor_factor
             self.buds_size = 0.45
+            flower = self.buds_size * p["bud_ref_g"]
+            root = 0.12 * total
+            rest = max(0.0, total - flower - root)
+            self.root_g, self.flower_g = root, flower
+            self.leaf_g, self.stem_g = rest * 0.55, rest * 0.45
+            self.leaf_senescence = 0.0
             self.trichomes_amber = 0.10
             self.root_health = 98.0
 
-    def update_growth(self, dt_hours, vwc, ec, ph, n_ppm, p_ppm, k_ppm, vpd, temp, light_exposure, pot_ml=5000.0, photoperiod_hours=18.0):
-        dt_days = dt_hours / 24.0
-        self.age_days += dt_days
-        
-        # 1. Determinación de Fase Fenológica Orgánica (Fotoperiodo & Edad)
+    def _update_phenology(self, photoperiod_hours):
+        """Fase biológica por fotoperiodo y edad (independiente de la etapa de manejo de riego)."""
+        p = self.params
         if self.age_days < 10.0:
             self.stage = CropStage.GERMINATION
-        else:
-            is_auto = (self.flowering_type == "AUTOFLORECIENTE")
-            if not self.flower_induced:
-                if photoperiod_hours <= 13.5 or (is_auto and self.age_days >= 28.0):
-                    self.flower_induced = True
-                    self.flower_induction_day = self.age_days
-
-            if self.flower_induced:
-                flower_days = max(0.0, self.age_days - self.flower_induction_day)
-                if flower_days < 18.0:
-                    self.stage = CropStage.STRETCH
-                elif flower_days < 52.0:
-                    self.stage = CropStage.FLOWERING
-                else:
-                    self.stage = CropStage.RIPENING
+            return
+        is_auto = (self.flowering_type == "AUTOFLORECIENTE")
+        if not self.flower_induced and (photoperiod_hours <= 13.5 or (is_auto and self.age_days >= 28.0)):
+            self.flower_induced = True
+            self.flower_induction_day = self.age_days
+        if self.flower_induced:
+            d = self.flower_days
+            if d < p["stretch_days"]:
+                self.stage = CropStage.STRETCH
+            elif d < p["ripening_day"]:
+                self.stage = CropStage.FLOWERING
             else:
-                self.stage = CropStage.VEGETATIVE
+                self.stage = CropStage.RIPENING
+        else:
+            self.stage = CropStage.VEGETATIVE
 
-        # 2. Estrés hídrico (diferenciado para plántula y adulto)
+    def _partition(self, water_stress, generative):
+        """Fracciones (raíz, hoja, tallo, flor) del carbono nuevo."""
+        p = self.params
+        d = self.flower_days
+        root = p["root_frac"]
+        flower_of_shoot = 0.0
+        leaf_share = p["leaf_frac_shoot"]
+        if self.flower_induced:
+            root *= 1.0 - p["root_drop"] * _smoothstep(d / p["root_drop_days"])
+            flower_of_shoot = p["flower_sink_max"] * _smoothstep((d - p["flower_start_day"]) / p["flower_ramp_days"])
+            if generative:
+                flower_of_shoot = min(0.9, flower_of_shoot * 1.1)
+            if d < p["stretch_days"]:
+                leaf_share = 0.55          # el estirón invierte más en tallo
+        root = min(0.55, root * (1.0 + 0.8 * water_stress))   # equilibrio funcional: sequía → más raíz
+        shoot = 1.0 - root
+        veg_shoot = shoot * (1.0 - flower_of_shoot)
+        return root, veg_shoot * leaf_share, veg_shoot * (1.0 - leaf_share), shoot * flower_of_shoot
+
+    def update_growth(self, dt_hours, vwc, ec, ph, n_ppm, p_ppm, k_ppm, vpd, temp, light_exposure,
+                      pot_ml=5000.0, photoperiod_hours=18.0, ppfd=0.0, co2_ppm=400.0, footprint_m2=0.25):
+        p = self.params
+        dt_days = dt_hours / 24.0
+        self.age_days += dt_days
+        self._update_phenology(photoperiod_hours)
+
+        # Senescencia foliar al final de la floración
+        if self.flower_induced:
+            self.leaf_senescence = max(self.leaf_senescence, min(
+                0.6, (self.flower_days - p["senescence_start"]) / p["senescence_span"]))
+
+        # 1. Estrés hídrico (diferenciado para plántula y adulto), hipoxia y raíz
         if self.stage == CropStage.GERMINATION:
             water_stress = max(0.0, min(1.0, (38.0 - vwc) / 20.0)) if vwc < 38.0 else 0.0
         else:
             water_stress = max(0.0, min(1.0, (24.0 - vwc) / 14.0)) if vwc < 24.0 else 0.0
-            
         hypoxia = max(0.0, min(1.0, (vwc - 66.0) / 20.0)) if vwc > 66.0 else 0.0
         self.root_health = max(10.0, min(100.0, self.root_health + (2.0 - hypoxia * 6.0) * dt_days))
 
-        # 3. Estrés por maceta pequeña sin trasplantar (Restricción radicular / Rootbound)
+        # 2. Maceta pequeña sin trasplantar (restricción radicular)
         pot_biomass_limit = (pot_ml / 500.0) * 12.0
         rootbound_stress = 0.0
         if self.biomass_g > pot_biomass_limit:
             over = (self.biomass_g - pot_biomass_limit) / max(pot_biomass_limit, 5.0)
             rootbound_stress = min(0.65, over * 0.40)
             self.root_health = max(10.0, self.root_health - rootbound_stress * 3.5 * dt_days)
-        
-        # 4. Estrés por EC y pH
+
+        # 3. Estrés por EC y pH
         target_ec_max = 2.2 if self.stage == CropStage.GERMINATION else (3.6 if self.stage == CropStage.VEGETATIVE else 5.2)
         ec_stress = max(0.0, min(1.0, (ec - target_ec_max) / 2.2)) if ec > target_ec_max else 0.0
         ph_stress = max(0.0, min(1.0, (5.5 - ph) / 0.7, (ph - 6.5) / 0.7))
 
-        # Requerimientos NPK
+        # Requerimientos NPK (se rehacen por demanda en la fase 4)
         if self.stage == CropStage.GERMINATION:
             n_req, p_req, k_req = 80.0, 25.0, 90.0
         elif self.stage in (CropStage.VEGETATIVE, CropStage.STRETCH):
             n_req, p_req, k_req = 150.0, 45.0, 180.0
         else:
             n_req, p_req, k_req = 95.0, 65.0, 220.0
-
-        n_ok = min(1.0, n_ppm / n_req)
-        p_ok = min(1.0, p_ppm / p_req)
-        k_ok = min(1.0, k_ppm / k_req)
-        nutrition_factor = max(0.20, min(n_ok, p_ok, k_ok)) * (1.0 - ph_stress * 0.7)
+        nutrition_factor = max(0.20, min(1.0, n_ppm / n_req, p_ppm / p_req, k_ppm / k_req)) * (1.0 - ph_stress * 0.7)
         combined_stress = max(water_stress, hypoxia, ec_stress * 0.8, ph_stress * 0.7, rootbound_stress)
         self.root_health = max(10.0, min(100.0, self.root_health - ph_stress * 5.0 * dt_days))
-        growth_factor = max(0.05, 1.0 - combined_stress) * nutrition_factor * (self.root_health / 100.0) * self.vigor_factor * light_exposure
 
-        # 5. Detección de Crop Steering (Vegetativo vs Generativo)
-        is_generative_steering = (ec >= 3.2 or (vwc < 48.0 and vpd > 1.25))
-        self.steering_type = "GENERATIVO" if is_generative_steering else "VEGETATIVO"
-        generative_boost = 1.35 if is_generative_steering else 1.0
+        # 4. Detección de Crop Steering (vegetativo vs generativo)
+        generative = (ec >= 3.2 or (vwc < 48.0 and vpd > 1.25))
+        self.steering_type = "GENERATIVO" if generative else "VEGETATIVO"
 
-        # 6. Crecimiento morfológico guiado
-        if self.stage == CropStage.GERMINATION:
-            self.height_cm += 1.0 * growth_factor * dt_days
-            self.biomass_g += 0.5 * growth_factor * dt_days
-        elif self.stage == CropStage.VEGETATIVE:
-            veg_foliar_mult = 1.25 if not is_generative_steering else 0.85
-            self.height_cm += 2.5 * growth_factor * veg_foliar_mult * dt_days
-            self.biomass_g += 3.2 * growth_factor * veg_foliar_mult * dt_days
-        elif self.stage == CropStage.STRETCH:
-            stretch_rate = 1.8 if is_generative_steering else 3.8
-            self.height_cm += stretch_rate * growth_factor * dt_days
-            self.biomass_g += 4.5 * growth_factor * dt_days
-        elif self.stage == CropStage.FLOWERING:
-            self.height_cm += 0.2 * growth_factor * dt_days
-            self.biomass_g += 4.2 * growth_factor * dt_days
-            self.buds_size = min(1.0, self.buds_size + 0.045 * growth_factor * generative_boost * dt_days)
-        elif self.stage == CropStage.RIPENING:
-            self.buds_size = min(1.0, self.buds_size + 0.015 * growth_factor * generative_boost * dt_days)
-            self.trichomes_amber = min(0.85, self.trichomes_amber + (0.050 if is_generative_steering else 0.025) * dt_days)
-            
-        self.height_cm = min(self.max_height_cm, self.height_cm)
-        
+        # 5. Fotosíntesis del dosel (solo con luz) y respiración
+        footprint_m2 = max(0.01, footprint_m2)
+        ppfd_canopy = max(0.0, ppfd * light_exposure)
+        lai = self.leaf_area_m2 / footprint_m2
+        stress = ((1.0 - 0.85 * combined_stress) * (0.35 + 0.65 * nutrition_factor)
+                  * (0.4 + 0.6 * self.root_health / 100.0) * self.vigor_factor)
+        a_c = canopy_photosynthesis_umol(ppfd_canopy, lai, temp, co2_ppm, p, stress)
+        self.a_canopy = a_c
+        dt_s = dt_hours * 3600.0
+        gpp = a_c * 30.0e-6 * footprint_m2 * dt_s                       # g CH2O
+        q = p["q10"] ** ((temp - 25.0) / 10.0)
+        maint = q * dt_days * (p["rm_leaf"] * self.leaf_g + p["rm_stem"] * self.stem_g
+                               + p["rm_root"] * self.root_g + p["rm_flower"] * self.flower_g)
+        self.gpp_total_g += gpp
+        self.resp_total_g += maint
+        self.par_total_mol += ppfd_canopy * footprint_m2 * dt_s * 1e-6
+
+        self.reserve_g += gpp - maint
+        if self.reserve_g < 0.0:
+            # Déficit: la planta consume tejido (hoja y raíz) para pagar el mantenimiento.
+            loss = min(-self.reserve_g, 0.5 * (self.leaf_g + self.root_g))
+            tot = max(self.leaf_g + self.root_g, 1e-9)
+            self.leaf_g -= loss * self.leaf_g / tot
+            self.root_g -= loss * self.root_g / tot
+            self.reserve_g = 0.0
+
+        # 6. Crecimiento: la reserva se convierte en materia seca con eficiencia Yg
+        use = self.reserve_g * (1.0 - math.exp(-dt_days / p["tau_use_days"]))
+        self.reserve_g -= use
+        new_mass = p["yg"] * use
+        f_root, f_leaf, f_stem, f_flower = self._partition(water_stress, generative)
+        self.root_g += new_mass * f_root
+        self.leaf_g += new_mass * f_leaf
+        self.stem_g += new_mass * f_stem
+        self.flower_g += new_mass * f_flower
+
+        # Caída de hojas bajas por autosombreo (hojarasca: ese carbono se pierde)
+        shade = max(0.0, min(1.0, (lai - p["lai_soft"]) / max(1e-6, p["lai_max"] - p["lai_soft"])))
+        shed = self.leaf_g * p["leaf_turnover_max"] * shade * dt_days
+        self.leaf_g -= shed
+        self.litter_g += shed
+
+        # Altura: elongación por masa de tallo (más intensa en el estirón; menos con steering generativo)
+        if self.stage == CropStage.STRETCH:
+            elong = 1.2 if generative else 1.8
+        elif self.stage in (CropStage.FLOWERING, CropStage.RIPENING):
+            elong = 0.3
+        else:
+            elong = 1.0
+        room = max(0.0, 1.0 - self.height_cm / self.max_height_cm)
+        self.height_cm = min(self.max_height_cm, self.height_cm + p["ssl_cm_per_g"] * elong * new_mass * f_stem * room)
+
+        # Flor y tricomas
+        self.buds_size = min(1.0, self.flower_g / p["bud_ref_g"])
+        if self.stage == CropStage.RIPENING:
+            self.trichomes_amber = min(0.85, self.trichomes_amber + (0.050 if generative else 0.025) * dt_days)
+
         # 7. Síntomas visibles
         self.leaf_droop = max(0.0, min(1.0, water_stress * 1.3 + hypoxia * 0.7 + rootbound_stress * 0.8))
         self.tip_burn = max(self.tip_burn, min(1.0, ec_stress * 1.1))
         self.leaf_claw = max(0.0, min(1.0, ec_stress * 0.9 + hypoxia * 0.5 + rootbound_stress * 0.4))
-        self.chlorosis = max(0.0, min(1.0, (100.0 - self.root_health) / 100.0 * 0.85 + (0.45 if self.stage == CropStage.RIPENING else 0.0)))
+        self.chlorosis = max(0.0, min(1.0, (100.0 - self.root_health) / 100.0 * 0.85
+                                      + max(0.45 if self.stage == CropStage.RIPENING else 0.0, self.leaf_senescence)))
         self.stem_purple = 1.0 if temp < 17.0 else max(0.0, self.stem_purple - dt_days * 0.2)
 
 
@@ -824,7 +1000,8 @@ class GreenhousePlantPhysics:
             self.n_ppm, self.p_ppm, self.k_ppm,
             vpd, temp, light_exposure,
             pot_ml=self.pot_ml,
-            photoperiod_hours=photoperiod_hours
+            photoperiod_hours=photoperiod_hours,
+            ppfd=ppfd, co2_ppm=co2_ppm, footprint_m2=footprint_m2
         )
         
         return {
@@ -1515,6 +1692,27 @@ class GreenhouseEnvironment:
         p.biology.root_health = min(100.0, p.biology.root_health + 20.0)
         return True
 
+    def set_carbon_params(self, values):
+        """Cambia a MANO parámetros del balance de carbono en todas las plantas.
+
+        Solo acepta claves de CARBON_DEFAULTS con valores numéricos finitos y positivos
+        (los parámetros nunca cambian solos). Devuelve las claves aplicadas.
+        """
+        applied = {}
+        for key, val in (values or {}).items():
+            if key not in CARBON_DEFAULTS:
+                continue
+            try:
+                v = float(val)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(v) or v <= 0.0:
+                continue
+            applied[key] = v
+        for p in self.plants:
+            p.biology.params.update(applied)
+        return sorted(applied)
+
     def update_plant_config(self, plant_id, cfg_data):
         """Actualiza la configuración de riego de una planta desde la UI."""
         if 0 <= plant_id < len(self.plants):
@@ -1760,6 +1958,18 @@ class GreenhouseEnvironment:
                 "height_cm": round(bio.height_cm, 1),
                 "biomass_g": round(bio.biomass_g, 1),
                 "leaf_area_m2": round(bio.leaf_area_m2, 3),
+                "lai": round(bio.leaf_area_m2 / max(0.01, self.plant_footprint_m2), 2),
+                "leaf_mass_g": round(bio.leaf_g, 1),
+                "stem_mass_g": round(bio.stem_g, 1),
+                "root_mass_g": round(bio.root_g, 1),
+                "flower_mass_g": round(bio.flower_g, 1),
+                "harvest_index": round(bio.harvest_index, 2),
+                "a_canopy_umol": round(bio.a_canopy, 1),
+                "carbon_reserve_g": round(bio.reserve_g, 2),
+                "gpp_total_g": round(bio.gpp_total_g, 1),
+                "resp_total_g": round(bio.resp_total_g, 1),
+                "litter_g": round(bio.litter_g, 1),
+                "carbon_params": dict(bio.params),
                 "total_et_ml": round(sel_p.total_et_ml, 0),
                 "root_health_pct": round(bio.root_health, 0),
                 "buds_size_pct": round(bio.buds_size * 100.0, 1),
