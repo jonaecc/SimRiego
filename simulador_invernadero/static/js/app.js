@@ -168,7 +168,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
         // Actuadores
         const pumpP1El = document.getElementById('actPumpP1');
-        pumpP1El.textContent = a.pump_p1 ? 'ON (BOMBEANDO P1)' : (a.pump_p2 ? 'ON (BOMBEANDO P2)' : 'OFF');
+        // Bomba compartida: se indica qué plantas la están usando (puede no ser la seleccionada).
+        const plantsTxt = (ids) => ids && ids.length ? ` · planta${ids.length > 1 ? 's' : ''} ${ids.join(', ')}` : '';
+        pumpP1El.textContent = a.pump_p1 ? `ON (BOMBEANDO P1${plantsTxt(a.pump_p1_plants)})`
+            : (a.pump_p2 ? `ON (BOMBEANDO P2${plantsTxt(a.pump_p2_plants)})` : 'OFF');
         pumpP1El.className = (a.pump_p1 || a.pump_p2) ? 'act-on' : 'act-off';
 
         const valve0El = document.getElementById('actValve0');
