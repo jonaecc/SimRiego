@@ -289,6 +289,34 @@ CARBON_DEFAULTS = {
 }
 
 
+# ── Nutrición por ion (fase 4) ──────────────────────────────────────────────
+# Tejido objetivo [% materia seca]: N y P de hoja y flor medidos en cannabis (hoja N 3,0-3,1 %,
+# flor 3,7-3,9 %; P hoja 0,66-0,89 %, flor 1,02-1,13 %); tallo y raíz solo con el orden relativo
+# medido (N: hoja > raíz > tallo; P: raíz > hoja > tallo). K NO tiene datos medidos aquí: son valores
+# típicos de cultivos [modelo]. Todo es manual y se debe calibrar con análisis foliares propios.
+ION_MASS_NO3_PER_N = 62.005 / 14.007      # masa de nitrato por masa de N
+ION_MASS_H2PO4_PER_P = 96.987 / 30.974    # masa de dihidrógenofosfato por masa de P
+TDS_PER_EC = 640.0                        # mg/L de sales por mS/cm (conversión habitual, aproximada)
+
+NUTRIENT_DEFAULTS = {
+    "x_n_leaf": 3.1, "x_n_stem": 1.2, "x_n_root": 2.5, "x_n_flower": 3.8,
+    "x_p_leaf": 0.8, "x_p_stem": 0.4, "x_p_root": 0.9, "x_p_flower": 1.1,
+    "x_k_leaf": 2.5, "x_k_stem": 2.8, "x_k_root": 2.0, "x_k_flower": 2.3,
+    "vmax_n": 40.0,       # absorción activa máxima [mg ion / g raíz seca / día] [modelo]
+    "vmax_p": 8.0,
+    "vmax_k": 40.0,
+    "km_n": 15.0,         # constante de Michaelis [mg/L en el agua de poro] [modelo]
+    "km_p": 3.0,
+    "km_k": 20.0,
+    "catchup_days": 2.0,  # días en que la planta intenta cubrir un déficit de tejido [modelo]
+    "luxury": 1.25,       # relación tejido/objetivo sobre la que deja de absorber [modelo]
+    "deficit_crit": 0.45, # relación tejido/objetivo a la que la fotosíntesis cae al mínimo [modelo]
+    "nh4_fraction": 0.06, # fracción del N absorbido como amonio (7,2 de 120 mg/L N en ensayo de vegetativo)
+    "buffer_mmol_l_ph": 25.0, # capacidad tampón del sustrato [mmol H+/L por unidad de pH] [modelo]
+}
+ION_ORGANS = ("leaf", "stem", "root", "flower")
+
+
 def canopy_photosynthesis_umol(ppfd, lai, temp_c, co2_ppm, params, stress=1.0):
     """Asimilación bruta del dosel [µmol CO2/m² de suelo/s].
 
@@ -328,6 +356,7 @@ class PlantBiology:
         self.flowering_type = "FOTOPERIODICA"
         self.vigor_factor = vigor_factor   # Variabilidad genética natural (0.85 a 1.20)
         self.params = dict(CARBON_DEFAULTS)
+        self.nutri = dict(NUTRIENT_DEFAULTS)
 
         self.age_days = 1.0
         self.height_cm = 5.0 * vigor_factor
@@ -341,6 +370,12 @@ class PlantBiology:
         self.flower_induction_day = 0.0
         self.steering_type = "VEGETATIVO"
         self.leaf_senescence = 0.0
+
+        # Contenido de iones en la planta [mg] y tasa de crecimiento por órgano [g/día] (media móvil)
+        self.growth_rate = {o: 0.0 for o in ION_ORGANS}
+        self.content = {ion: self.target_content(ion) for ion in "npk"}
+        self.nutrient_status = {ion: 1.0 for ion in "npk"}   # contenido / objetivo
+        self.nutrient_uptake_total = {ion: 0.0 for ion in "npk"}
 
         # Reserva de carbono (g CH2O) y contadores de diagnóstico acumulados
         self.reserve_g = 0.0
@@ -384,6 +419,8 @@ class PlantBiology:
         self.leaf_g *= f
         self.stem_g *= f
         self.flower_g *= f
+        for ion in self.content:
+            self.content[ion] *= f
 
     @property
     def leaf_area_m2(self):
@@ -401,6 +438,37 @@ class PlantBiology:
     @property
     def flower_days(self):
         return max(0.0, self.age_days - self.flower_induction_day) if self.flower_induced else 0.0
+
+    # ── Nutrición ───────────────────────────────────────────────────────────
+    def organ_mass(self, organ):
+        return getattr(self, organ + "_g")
+
+    def tissue_target(self, ion, organ):
+        """Concentración objetivo [mg/g materia seca] del ion en el órgano."""
+        return 10.0 * self.nutri["x_%s_%s" % (ion, organ)]
+
+    def target_content(self, ion):
+        """Contenido del ion [mg] que tendría la planta con todos sus órganos en el objetivo."""
+        return sum(self.organ_mass(o) * self.tissue_target(ion, o) for o in ION_ORGANS)
+
+    def tissue_concentration(self, ion):
+        """Concentración media del ion en la planta [% materia seca]."""
+        return 0.1 * self.content[ion] / max(self.biomass_g, 1e-9)
+
+    def nutrient_demand(self, dt_days):
+        """Demanda de cada ion [mg] en dt_days: lo que exige el crecimiento reciente más la recuperación de un déficit."""
+        n = self.nutri
+        out = {}
+        for ion in "npk":
+            growth = sum(self.growth_rate[o] * self.tissue_target(ion, o) for o in ION_ORGANS) * dt_days
+            target = self.target_content(ion)
+            gap = target - self.content[ion]
+            catchup = max(0.0, gap) / n["catchup_days"] * dt_days
+            demand = growth + catchup
+            if self.content[ion] > n["luxury"] * target:
+                demand = 0.0
+            out[ion] = demand
+        return out
 
     def sync_to_stage(self, stage):
         """Sincroniza la morfología base (solo para resets o inicialización explícita)."""
@@ -443,6 +511,7 @@ class PlantBiology:
             self.leaf_senescence = 0.0
             self.trichomes_amber = 0.10
             self.root_health = 98.0
+        self.content = {ion: self.target_content(ion) for ion in "npk"}   # tejidos en su objetivo tras el reinicio
 
     def _update_phenology(self, photoperiod_hours):
         """Fase biológica por fotoperiodo y edad (independiente de la etapa de manejo de riego)."""
@@ -484,8 +553,11 @@ class PlantBiology:
         veg_shoot = shoot * (1.0 - flower_of_shoot)
         return root, veg_shoot * leaf_share, veg_shoot * (1.0 - leaf_share), shoot * flower_of_shoot
 
-    def update_growth(self, dt_hours, vwc, ec, ph, n_ppm, p_ppm, k_ppm, vpd, temp, light_exposure,
-                      pot_ml=5000.0, photoperiod_hours=18.0, ppfd=0.0, co2_ppm=400.0, footprint_m2=0.25):
+    def update_growth(self, dt_hours, vwc, ec, ph, vpd, temp, light_exposure,
+                      pot_ml=5000.0, photoperiod_hours=18.0, ppfd=0.0, co2_ppm=400.0, footprint_m2=0.25,
+                      uptake_mg=None):
+        """uptake_mg: {"n","p","k"} mg absorbidos en este paso. Si es None (uso aislado) la planta
+        se alimenta idealmente: absorbe justo lo que demanda."""
         p = self.params
         dt_days = dt_hours / 24.0
         self.age_days += dt_days
@@ -517,14 +589,16 @@ class PlantBiology:
         ec_stress = max(0.0, min(1.0, (ec - target_ec_max) / 2.2)) if ec > target_ec_max else 0.0
         ph_stress = max(0.0, min(1.0, (5.5 - ph) / 0.7, (ph - 6.5) / 0.7))
 
-        # Requerimientos NPK (se rehacen por demanda en la fase 4)
-        if self.stage == CropStage.GERMINATION:
-            n_req, p_req, k_req = 80.0, 25.0, 90.0
-        elif self.stage in (CropStage.VEGETATIVE, CropStage.STRETCH):
-            n_req, p_req, k_req = 150.0, 45.0, 180.0
-        else:
-            n_req, p_req, k_req = 95.0, 65.0, 220.0
-        nutrition_factor = max(0.20, min(1.0, n_ppm / n_req, p_ppm / p_req, k_ppm / k_req)) * (1.0 - ph_stress * 0.7)
+        # Nutrición: el tejido recibe lo absorbido; el estado (contenido/objetivo) limita la fotosíntesis.
+        if uptake_mg is None:
+            uptake_mg = self.nutrient_demand(dt_days)
+        for ion in "npk":
+            self.content[ion] += uptake_mg.get(ion, 0.0)
+            self.nutrient_uptake_total[ion] += uptake_mg.get(ion, 0.0)
+            self.nutrient_status[ion] = self.content[ion] / max(self.target_content(ion), 1e-9)
+        crit = self.nutri["deficit_crit"]
+        worst = min(self.nutrient_status.values())
+        nutrition_factor = max(0.20, min(1.0, (worst - crit) / (1.0 - crit))) * (1.0 - ph_stress * 0.7)
         combined_stress = max(water_stress, hypoxia, ec_stress * 0.8, ph_stress * 0.7, rootbound_stress)
         self.root_health = max(10.0, min(100.0, self.root_health - ph_stress * 5.0 * dt_days))
 
@@ -567,12 +641,18 @@ class PlantBiology:
         self.leaf_g += new_mass * f_leaf
         self.stem_g += new_mass * f_stem
         self.flower_g += new_mass * f_flower
+        alpha = 1.0 - math.exp(-dt_days / 0.5)
+        for organ, frac in (("root", f_root), ("leaf", f_leaf), ("stem", f_stem), ("flower", f_flower)):
+            rate = new_mass * frac / max(dt_days, 1e-9)
+            self.growth_rate[organ] += alpha * (rate - self.growth_rate[organ])
 
         # Caída de hojas bajas por autosombreo (hojarasca: ese carbono se pierde)
         shade = max(0.0, min(1.0, (lai - p["lai_soft"]) / max(1e-6, p["lai_max"] - p["lai_soft"])))
         shed = self.leaf_g * p["leaf_turnover_max"] * shade * dt_days
         self.leaf_g -= shed
         self.litter_g += shed
+        for ion in "npk":      # la hoja que cae se lleva su contenido de nutrientes
+            self.content[ion] = max(0.0, self.content[ion] - shed * self.tissue_target(ion, "leaf") * min(1.0, self.nutrient_status[ion]))
 
         # Altura: elongación por masa de tallo (más intensa en el estirón; menos con steering generativo)
         if self.stage == CropStage.STRETCH:
@@ -594,7 +674,8 @@ class PlantBiology:
         self.tip_burn = max(self.tip_burn, min(1.0, ec_stress * 1.1))
         self.leaf_claw = max(0.0, min(1.0, ec_stress * 0.9 + hypoxia * 0.5 + rootbound_stress * 0.4))
         self.chlorosis = max(0.0, min(1.0, (100.0 - self.root_health) / 100.0 * 0.85
-                                      + max(0.45 if self.stage == CropStage.RIPENING else 0.0, self.leaf_senescence)))
+                                      + max(0.45 if self.stage == CropStage.RIPENING else 0.0, self.leaf_senescence)
+                                      + max(0.0, 1.0 - self.nutrient_status["n"]) * 1.2))
         self.stem_purple = 1.0 if temp < 17.0 else max(0.0, self.stem_purple - dt_days * 0.2)
 
 
@@ -620,13 +701,11 @@ class GreenhousePlantPhysics:
         compaction = random.uniform(0.97, 1.03)     # compactación del sustrato (±3 % en α)
         self._pot_ml = 3500.0
         self.col = PotColumn(self._pot_ml, "COCO", alpha_scale=compaction)
-        self._col_acc = {"dt": 0.0, "sink": [0.0] * self.col.n, "evap": [0.0] * self.col.n}
+        self._col_acc = self._new_acc()
         self.cc_source = "model"            # "model" (derivada de la curva), "test" (ensayo CC) o "manual"
         self.vwc_cc = self.col.capacity_sensor_vwc()
         self.vwc_pmp = 15.0
-        self.fill_uniform(38.0, 2.4)
-        self.ph = 5.9
-        self.n_mg, self.p_mg, self.k_mg = 160.0 * self.W / 1000.0, 50.0 * self.W / 1000.0, 200.0 * self.W / 1000.0
+        self.fill_uniform(38.0, 2.4, n=160.0, p=50.0, k=200.0, ph=5.9)
         
         # Bandeja y celda de carga
         self.tray_ml = 0.0
@@ -701,10 +780,21 @@ class GreenhousePlantPhysics:
         self.col.resize(value)
         if self.cc_source == "model":
             self.vwc_cc = self.col.capacity_sensor_vwc()
-    def fill_uniform(self, vwc_pct, ec):
-        """Llena la maceta con VWC y EC uniformes (estado inicial o de reinicio)."""
+    def _new_acc(self):
+        return {"dt": 0.0, "sink": [0.0] * self.col.n, "evap": [0.0] * self.col.n,
+                "mass": {}, "proton_mmol": [0.0] * self.col.n}
+
+    def fill_uniform(self, vwc_pct, ec, n=None, p=None, k=None, ph=None):
+        """Llena la maceta con VWC, EC, NPK [ppm] y pH uniformes (estado inicial o de reinicio).
+
+        Lo que no se indica conserva su promedio actual."""
+        keep = {"n": self.n_ppm, "p": self.p_ppm, "k": self.k_ppm, "ph": self.ph} if self.col.water_ml > 0 else {"n": 0.0, "p": 0.0, "k": 0.0, "ph": 5.9}
         self.col.theta = [vwc_pct / 100.0] * self.col.n
         self.col.set_salt(self.col.water_ml * ec)
+        self.col.set_uniform("n", keep["n"] if n is None else n)
+        self.col.set_uniform("p", keep["p"] if p is None else p)
+        self.col.set_uniform("k", keep["k"] if k is None else k)
+        self.col.set_uniform("ph", keep["ph"] if ph is None else ph)
     @property
     def W(self): return self.col.water_ml
     @W.setter
@@ -748,11 +838,26 @@ class GreenhousePlantPhysics:
         w = self.col.root_weights(self.biology.root_g)
         return sum(wi * e for wi, e in zip(w, self.col.ec_layers()))
     @property
-    def n_ppm(self): return 1000.0 * self.n_mg / max(self.W, 1.0)
+    def n_mg(self): return self.col.tracer_total("n")
     @property
-    def p_ppm(self): return 1000.0 * self.p_mg / max(self.W, 1.0)
+    def p_mg(self): return self.col.tracer_total("p")
     @property
-    def k_ppm(self): return 1000.0 * self.k_mg / max(self.W, 1.0)
+    def k_mg(self): return self.col.tracer_total("k")
+    @property
+    def n_ppm(self): return self.col.mean_conc("n")
+    @property
+    def p_ppm(self): return self.col.mean_conc("p")
+    @property
+    def k_ppm(self): return self.col.mean_conc("k")
+    @property
+    def ph(self):
+        """pH medio del agua de poro."""
+        return self.col.mean_conc("ph")
+    @ph.setter
+    def ph(self, value):
+        self.col.set_uniform("ph", float(value))
+    @property
+    def ph_sensor(self): return self.col.zone_conc("ph", self.col.sensor_z0, self.col.sensor_z1)
     @property
     def W_cc(self):
         """Agua retenida en capacidad de contenedor [mL] (física si la CC es la derivada del modelo)."""
@@ -771,8 +876,6 @@ class GreenhousePlantPhysics:
 
     def _load_stage_profile(self, stage, preserve_vwc=True, allow_downsize=True):
         profile = self.stage_profiles[stage]
-        old_vwc, old_ec = self.vwc, self.ec
-        old_n, old_p, old_k = self.n_ppm, self.p_ppm, self.k_ppm
         old_pot = self.pot_ml
         self.pot_ml = float(profile["pot_volume_ml"])
         if not allow_downsize:
@@ -781,16 +884,11 @@ class GreenhousePlantPhysics:
         self.vwc_pmp = float(profile["vwc_pmp"])
         for field in IRRIGATION_FIELDS:
             setattr(self.config, field, profile[field])
-        if preserve_vwc:
-            # El perfil de agua y sales por capa se conserva (el trasplante solo cambia la geometría).
-            self.n_mg, self.p_mg, self.k_mg = old_n * self.W / 1000.0, old_p * self.W / 1000.0, old_k * self.W / 1000.0
-        else:
+        if not preserve_vwc:
+            # Con preserve_vwc el perfil de agua, sales, iones y pH por capa se conserva (el trasplante solo cambia la geometría).
             init_vals = STAGE_SUBSTRATE_INIT.get(stage, STAGE_SUBSTRATE_INIT["PLANTULA"])
-            self.fill_uniform(init_vals["vwc"], init_vals["ec"])
-            self.ph = init_vals["ph"]
-            self.n_mg = init_vals["n"] * self.W / 1000.0
-            self.p_mg = init_vals["p"] * self.W / 1000.0
-            self.k_mg = init_vals["k"] * self.W / 1000.0
+            self.fill_uniform(init_vals["vwc"], init_vals["ec"], n=init_vals["n"], p=init_vals["p"],
+                              k=init_vals["k"], ph=init_vals["ph"])
 
     def set_management_stage(self, stage, sync_bio=True):
         if stage not in MANAGEMENT_STAGES:
@@ -844,16 +942,39 @@ class GreenhousePlantPhysics:
         self.vwc_pmp = self.col.wilting_vwc()
         if not preserve_vwc:
             init_vals = STAGE_SUBSTRATE_INIT.get(self.management_stage, STAGE_SUBSTRATE_INIT["PLANTULA"])
-            self.fill_uniform(init_vals["vwc"], init_vals["ec"])
-            self.ph = init_vals["ph"]
-            self.n_mg = init_vals["n"] * self.W / 1000.0
-            self.p_mg = init_vals["p"] * self.W / 1000.0
-            self.k_mg = init_vals["k"] * self.W / 1000.0
+            self.fill_uniform(init_vals["vwc"], init_vals["ec"], n=init_vals["n"], p=init_vals["p"],
+                              k=init_vals["k"], ph=init_vals["ph"])
         retained_ml = self.W_cc
         self.config.p1_vol_cc = retained_ml
         self.config.p2_vol_cc = retained_ml
         self.config.p2_vwc_cc_ref = self.vwc_cc
         return True
+
+    def _ion_uptake(self, demand, water_uptake_layers, dt_min, dt_days, rw):
+        """Absorción de N, P y K por capa: la que cubra la demanda de la planta, con lo que dé
+        el flujo de masa (agua tomada × concentración) o la absorción activa saturable
+        (Vmax·raíz·C/(Km+C)), la mayor de ambas, sin vaciar la capa. Devuelve (mg por ion, mg por capa)."""
+        col, nu = self.col, self.biology.nutri
+        n = col.n
+        health = max(0.3, self.biology.root_health / 100.0)
+        root_g = self.biology.root_g
+        w = [max(t * col.layer_ml, 1e-6) for t in col.theta]
+        uptake, per_layer = {}, {}
+        for ion in "npk":
+            mass = col.tracers[ion]
+            sup = [0.0] * n
+            for j in range(n):
+                m = max(0.0, mass[j])
+                c_mg_ml = m / w[j]
+                passive = water_uptake_layers[j] * dt_min * c_mg_ml          # mL/min × min
+                c_ppm = 1000.0 * c_mg_ml
+                active = nu["vmax_" + ion] * root_g * rw[j] * health * c_ppm / (nu["km_" + ion] + c_ppm) * dt_days
+                sup[j] = min(0.9 * m, max(passive, active))
+            tot = sum(sup)
+            f = min(1.0, demand[ion] / tot) if tot > 1e-12 else 0.0
+            per_layer[ion] = [x * f for x in sup]
+            uptake[ion] = sum(per_layer[ion])
+        return uptake, per_layer
 
     def step(self, dt_seconds, is_day, vpd, temp, pump_active, solution, light_exposure,
              fase_global=None, photoperiod_hours=18.0, ppfd=0.0, co2_ppm=400.0,
@@ -893,12 +1014,7 @@ class GreenhousePlantPhysics:
         # (compensación entre capas); la evaporación sale de las capas superiores y deja las sales.
         uptake_layers, trans_rate = self.col.allocate_uptake(et_trans, dt_min, self.biology.root_g, heads=heads)
         evap_layers, evap_rate = self.col.evaporation(et_evap, dt_min)
-        trans_loss = trans_rate * dt_min
         self.total_et_ml += (trans_rate + evap_rate) * dt_min
-        # Las raíces absorben iones del flujo de agua transpirativa (flujo de masa + transporte activo).
-        # Típicamente entre 55% y 75% de las sales disueltas en el agua transpirada son asimiladas para
-        # síntesis de biomasa celular. El resto se concentra gradualmente en el dryback.
-        root_efficiency = max(0.35, min(0.85, 0.65 * (self.biology.root_health / 100.0)))
 
         # 3. Riego entrante
         inflow_rate = 0.0
@@ -906,15 +1022,10 @@ class GreenhousePlantPhysics:
         if self.valve_open and pump_active:
             inflow_rate = self.config.flow_ml_min * self.dripper_variance
             inflow_ml = inflow_rate * dt_min
-            water_before = self.W
-            self.ph = (self.ph * water_before + solution.ph * inflow_ml) / max(water_before + inflow_ml, 1.0)
-            self.n_mg += inflow_ml * solution.n / 1000.0
-            self.p_mg += inflow_ml * solution.p / 1000.0
-            self.k_mg += inflow_ml * solution.k / 1000.0
             self.total_irrigation_ml += inflow_ml
 
-        # 4. Flujo de agua y sales en la columna (goteo arriba, filtración por el fondo)
-        # Los pasos cortos sin riego se acumulan (≥ COL_MIN_SOLVE_S) antes de resolver Richards:
+        # 4. Columna, nutrientes y biología. Los pasos cortos sin riego se acumulan
+        # (≥ COL_MIN_SOLVE_S) antes de resolver Richards, absorber iones y crecer:
         # los sumideros se aplican por su masa acumulada, así el balance no cambia.
         acc = self._col_acc
         acc["dt"] += dt_min
@@ -926,17 +1037,50 @@ class GreenhousePlantPhysics:
             dt_solve = acc["dt"]
             sinks = [x / dt_solve for x in acc["sink"]]
             evaps = [x / dt_solve for x in acc["evap"]]
-            runoff_ml = self.col.step(dt_solve, inflow_rate, solution.ec, sinks,
-                                      salt_uptake_frac=root_efficiency, evap_ml_min=evaps,
-                                      heads=heads if dt_solve == dt_min else None)
-            acc["dt"] = 0.0
-            acc["sink"] = [0.0] * self.col.n
-            acc["evap"] = [0.0] * self.col.n
+            # Absorción de iones por capa según la demanda de la planta; sale de cada capa y arrastra
+            # su fracción de sales (las no medidas se retiran en proporción a N+P+K) y protones.
+            dt_days_s = dt_solve / 1440.0
+            demand = self.biology.nutrient_demand(dt_days_s)
+            uptake_mg, per_layer = self._ion_uptake(demand, sinks, dt_solve, dt_days_s, rw)
+            nu_b = self.biology.nutri
+            nh4 = nu_b["nh4_fraction"]
+            tr = self.col.tracers
+            acc["mass"] = {k: [0.0] * self.col.n for k in ("salt", "n", "p", "k")}
+            for j in range(self.col.n):
+                # Sales retiradas con N, P y K: masa iónica absorbida (NO3⁻ 4.43 g/g N, H2PO4⁻ 3.13 g/g P,
+                # K⁺ 1 g/g K) convertida a CE con ~640 mg/L por mS/cm. El resto de sales (Ca, Mg, SO4,
+                # Na…) no lo toma la planta aquí y se queda: la CE de la maceta no cae a cero.
+                ion_mg = (ION_MASS_NO3_PER_N * per_layer["n"][j] + ION_MASS_H2PO4_PER_P * per_layer["p"][j]
+                          + per_layer["k"][j])
+                acc["mass"]["salt"][j] = min(0.9 * max(0.0, tr["salt"][j]), ion_mg * 1000.0 / TDS_PER_EC)
+                for ion in "npk":
+                    acc["mass"][ion][j] = per_layer[ion][j]
+                # Carga neta absorbida: cationes (K+, NH4+) liberan H+, aniones (NO3-, H2PO4-) lo consumen.
+                acc["proton_mmol"][j] = (per_layer["k"][j] / 39.098 + (2.0 * nh4 - 1.0) * per_layer["n"][j] / 14.007
+                                         - per_layer["p"][j] / 30.974)
+            c_in = {"salt": solution.ec, "n": solution.n / 1000.0, "p": solution.p / 1000.0,
+                    "k": solution.k / 1000.0, "ph": solution.ph}
+            runoff_ml = self.col.step(dt_solve, inflow_rate, c_in, sinks, uptake_mass=acc["mass"],
+                                      evap_ml_min=evaps, heads=heads if dt_solve == dt_min else None)
+            # Protones de la absorción: cambian el pH de cada capa según el tampón del sustrato.
+            buf = nu_b["buffer_mmol_l_ph"]
+            ph_m = self.col.tracers["ph"]
+            for j in range(self.col.n):
+                w_ml = max(self.col.theta[j] * self.col.layer_ml, 1e-6)
+                ph_j = ph_m[j] / w_ml - acc["proton_mmol"][j] / (buf * w_ml / 1000.0)
+                ph_m[j] = max(3.5, min(9.0, ph_j)) * w_ml
+            self._col_acc = self._new_acc()
+
+            # 5. Biología (con lo absorbido y el estado de la zona radicular)
+            self.biology.update_growth(
+                dt_solve / 60.0, vwc_root_now, sum(wi * ec_l for wi, ec_l in zip(rw, self.col.ec_layers())),
+                sum(wi * ph_l for wi, ph_l in zip(rw, self.col.conc_layers("ph"))),
+                vpd, temp, light_exposure,
+                pot_ml=self.pot_ml,
+                photoperiod_hours=photoperiod_hours,
+                ppfd=ppfd, co2_ppm=co2_ppm, footprint_m2=footprint_m2, uptake_mg=uptake_mg
+            )
         if runoff_ml > 0.0:
-            fraction = runoff_ml / max(self.W + runoff_ml, 1.0)
-            self.n_mg *= max(0.0, 1.0 - fraction)
-            self.p_mg *= max(0.0, 1.0 - fraction)
-            self.k_mg *= max(0.0, 1.0 - fraction)
             self.tray_ml += runoff_ml
             # El firmware compara pesoFiltrado (la lectura de la celda) contra
             # CB. Se conserva el agua física por separado para visualizar una
@@ -955,22 +1099,6 @@ class GreenhousePlantPhysics:
             elif fase_global == "P3":
                 self.runoff_fase_p3 += runoff_ml
 
-        # 5. Absorción de nutrientes (el modelo por ion llega en la fase 4)
-        uptake_fraction = min(0.5, (trans_loss / max(self.W, 1.0)) * root_efficiency)
-        self.n_mg = max(0.0, self.n_mg * (1.0 - uptake_fraction))
-        self.p_mg = max(0.0, self.p_mg * (1.0 - uptake_fraction * 0.9))
-        self.k_mg = max(0.0, self.k_mg * (1.0 - uptake_fraction * 1.1))
-
-        # 6. Biología
-        self.biology.update_growth(
-            dt_hours, vwc_root_now, sum(wi * ec_l for wi, ec_l in zip(rw, self.col.ec_layers())), self.ph,
-            self.n_ppm, self.p_ppm, self.k_ppm,
-            vpd, temp, light_exposure,
-            pot_ml=self.pot_ml,
-            photoperiod_hours=photoperiod_hours,
-            ppfd=ppfd, co2_ppm=co2_ppm, footprint_m2=footprint_m2
-        )
-        
         return {
             "inflow_ml": inflow_ml,
             "runoff_ml": runoff_ml,
@@ -1050,7 +1178,7 @@ class GreenhouseEnvironment:
         self.apply_stage_environment("PLANTULA")
         # Día 1: el sustrato arranca con VWC inicial bajo (el P1 lo recarga) (INITIAL_VWC_PCT), no a capacidad de campo.
         for p in self.plants:
-            p.fill_uniform(INITIAL_VWC_PCT, p.ec)
+            p.fill_uniform(INITIAL_VWC_PCT, p.ec)   # conserva NPK y pH actuales
 
     @property
     def hour_of_day(self):
@@ -1675,6 +1803,27 @@ class GreenhouseEnvironment:
             p.biology.params.update(applied)
         return sorted(applied)
 
+    def set_nutrient_params(self, values):
+        """Cambia a MANO parámetros de la nutrición por ion (contenido objetivo en tejido, Vmax, Km,
+        tampón del sustrato, fracción amoniacal…). Solo acepta claves de NUTRIENT_DEFAULTS con valores
+        finitos y positivos (nh4_fraction puede ser 0). Los parámetros nunca cambian solos."""
+        applied = {}
+        for key, val in (values or {}).items():
+            if key not in NUTRIENT_DEFAULTS:
+                continue
+            try:
+                v = float(val)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(v) or v < 0.0 or (v == 0.0 and key != "nh4_fraction"):
+                continue
+            if key == "nh4_fraction" and v > 1.0:
+                continue
+            applied[key] = v
+        for p in self.plants:
+            p.biology.nutri.update(applied)
+        return sorted(applied)
+
     def update_plant_config(self, plant_id, cfg_data):
         """Actualiza la configuración de riego de una planta desde la UI."""
         if 0 <= plant_id < len(self.plants):
@@ -1901,6 +2050,8 @@ class GreenhouseEnvironment:
                 "profile_vwc": [round(100.0 * t, 1) for t in sel_p.col.theta],
                 "profile_ec": [round(e, 2) for e in sel_p.col.ec_layers()],
                 "profile_head_cm": [round(h, 1) for h in sel_p.col.heads()],
+                "profile_ph": [round(x, 2) for x in sel_p.col.conc_layers("ph")],
+                "profile_npk_ppm": {i: [round(1000.0 * x, 1) for x in sel_p.col.conc_layers(i)] for i in "npk"},
                 "sensor_zone_pct": [round(100.0 * sel_p.col.sensor_z0), round(100.0 * sel_p.col.sensor_z1)],
                 "cc_source": sel_p.cc_source,
                 "pot_height_cm": round(sel_p.col.height, 1),
@@ -1947,6 +2098,10 @@ class GreenhouseEnvironment:
                 "resp_total_g": round(bio.resp_total_g, 1),
                 "litter_g": round(bio.litter_g, 1),
                 "carbon_params": dict(bio.params),
+                "tissue_pct": {i: round(bio.tissue_concentration(i), 2) for i in "npk"},
+                "nutrient_status": {i: round(bio.nutrient_status[i], 2) for i in "npk"},
+                "nutrient_uptake_mg": {i: round(bio.nutrient_uptake_total[i], 1) for i in "npk"},
+                "nutrient_params": dict(bio.nutri),
                 "total_et_ml": round(sel_p.total_et_ml, 0),
                 "root_health_pct": round(bio.root_health, 0),
                 "buds_size_pct": round(bio.buds_size * 100.0, 1),

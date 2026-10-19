@@ -82,6 +82,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     if "aero_cond" in msg: env.aero_conductance_m_s = max(0.002, min(0.5, float(msg["aero_cond"])))
                 elif cmd == "set_carbon":
                     env.set_carbon_params(msg.get("params", {}))
+                elif cmd == "set_nutrient":
+                    env.set_nutrient_params(msg.get("params", {}))
                 elif cmd == "update_solution":
                     env.update_solution(msg.get("pump", "P1"), msg.get("solution", {}))
                 elif cmd == "select_plant":

@@ -204,6 +204,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (orgEl) orgEl.textContent = `${p.leaf_mass_g} / ${p.stem_mass_g} / ${p.root_mass_g} / ${p.flower_mass_g} g`;
         const carEl = document.getElementById('cropCarbon');
         if (carEl) carEl.textContent = `${p.lai} · ${p.a_canopy_umol} µmol/m²/s`;
+        const tisEl = document.getElementById('cropTissue');
+        if (tisEl && p.tissue_pct) tisEl.textContent = `${p.tissue_pct.n} / ${p.tissue_pct.p} / ${p.tissue_pct.k} % (est. ${p.nutrient_status.n} / ${p.nutrient_status.p} / ${p.nutrient_status.k})`;
         const leafEl = document.getElementById('cropLeafArea');
         if (leafEl) leafEl.textContent = `${p.leaf_area_m2} m²`;
         document.getElementById('cropRootHealth').textContent = `${p.root_health_pct}%`;
@@ -440,6 +442,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (el) el.addEventListener('change', (ev) => {
             const v = parseFloat(ev.target.value);
             if (!isNaN(v) && v > 0) sendCmd({ cmd: 'set_carbon', params: { [key]: v } });
+        });
+    });
+
+    [['inVmaxN', 'vmax_n'], ['inVmaxK', 'vmax_k'], ['inBuffer', 'buffer_mmol_l_ph'], ['inNh4', 'nh4_fraction']].forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', (ev) => {
+            const v = parseFloat(ev.target.value);
+            if (!isNaN(v) && v >= 0) sendCmd({ cmd: 'set_nutrient', params: { [key]: v } });
         });
     });
 

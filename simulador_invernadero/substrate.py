@@ -16,6 +16,8 @@ referencia (ver comentario); el resto son ilustrativos y deben calibrarse.
 import math
 
 N_LAYERS = 12
+TRACERS = ("salt", "n", "p", "k", "ph")
+INTENSIVE = ("ph",)         # se quitan junto con el agua (no se concentran por evaporación ni absorción)
 CYL_COEF = math.pi * 0.3     # volumen de un cilindro de altura 1,2·d: V = CYL_COEF·d³
 SS = 5e-4                    # almacenamiento específico en saturación [1/cm] (evita C=0)
 H_MIN = -3.0e5               # tope seco numérico [cm]
@@ -94,7 +96,8 @@ class PotColumn:
         self.set_substrate(substrate)
         self.set_geometry(pot_ml)
         self.theta = [0.0] * self.n
-        self.salt = [0.0] * self.n          # EC·mL por capa
+        # Trazadores por capa: salt = EC·mL; n, p, k = mg; ph = pH·mL (variable intensiva, mezcla por volumen)
+        self.tracers = {name: [0.0] * self.n for name in TRACERS}
         self.last_fluxes = [0.0] * (self.n + 1)   # mL/min, + hacia abajo (0 = entrada, n = drenaje)
         self.sensor_z0, self.sensor_z1 = 0.15, 0.50   # el sensor promedia entre estas fracciones de profundidad
         self._rw_cache = {}
@@ -118,7 +121,8 @@ class PotColumn:
         """Cambia de maceta conservando el perfil de VWC y la EC por capa (trasplante)."""
         ratio = max(50.0, float(pot_ml)) / self.pot_ml
         self.set_geometry(pot_ml)
-        self.salt = [s * ratio for s in self.salt]
+        for name in TRACERS:
+            self.tracers[name] = [m * ratio for m in self.tracers[name]]
 
     # ── Estado ──────────────────────────────────────────────────────────────
     def water_layers(self):
@@ -152,13 +156,48 @@ class PotColumn:
         else:
             self.theta = [total_ml / self.pot_ml] * self.n
 
-    def set_salt(self, total):
-        """Reparte la sal total según el agua de cada capa (EC uniforme)."""
+    @property
+    def salt(self):
+        return self.tracers["salt"]
+
+    @salt.setter
+    def salt(self, values):
+        self.tracers["salt"] = list(values)
+
+    def set_tracer_total(self, name, total):
+        """Reparte la masa total de un trazador según el agua de cada capa (concentración uniforme)."""
         w = self.water_ml
         if w <= 1e-9:
-            self.salt = [total / self.n] * self.n
+            self.tracers[name] = [total / self.n] * self.n
         else:
-            self.salt = [total * t * self.layer_ml / w for t in self.theta]
+            self.tracers[name] = [total * t * self.layer_ml / w for t in self.theta]
+
+    def set_salt(self, total):
+        """Reparte la sal total según el agua de cada capa (EC uniforme)."""
+        self.set_tracer_total("salt", total)
+
+    def set_uniform(self, name, conc):
+        """Concentración uniforme: ppm para n/p/k, pH para ph, mS/cm para salt."""
+        per_ml = conc / 1000.0 if name in ("n", "p", "k") else conc
+        self.tracers[name] = [per_ml * t * self.layer_ml for t in self.theta]
+
+    def tracer_total(self, name):
+        return sum(self.tracers[name])
+
+    def conc_layers(self, name):
+        """Concentración por capa: ppm (mg/L) para n/p/k, pH para ph, mS/cm para salt."""
+        k = 1000.0 if name in ("n", "p", "k") else 1.0
+        return [k * m / max(t * self.layer_ml, 1e-6) for m, t in zip(self.tracers[name], self.theta)]
+
+    def zone_conc(self, name, z0, z1):
+        idx = self._zone(z0, z1)
+        w = sum(self.theta[i] for i in idx) * self.layer_ml
+        k = 1000.0 if name in ("n", "p", "k") else 1.0
+        return k * sum(self.tracers[name][i] for i in idx) / max(w, 1.0)
+
+    def mean_conc(self, name):
+        k = 1000.0 if name in ("n", "p", "k") else 1.0
+        return k * self.tracer_total(name) / max(self.water_ml, 1.0)
 
     @property
     def salt_total(self):
@@ -271,10 +310,11 @@ class PotColumn:
         return max(0.0, 1.0 - (math.log10(-h0) - math.log10(50.0)) / (math.log10(1000.0) - math.log10(50.0)))
 
     # ── Paso ────────────────────────────────────────────────────────────────
-    def step(self, dt_min, inflow_ml_min, c_in, sinks_ml_min, salt_uptake_frac=None, evap_ml_min=None, heads=None):
+    def step(self, dt_min, inflow_ml_min, c_in, sinks_ml_min, uptake_mass=None, evap_ml_min=None, heads=None):
         """Avanza dt_min. Devuelve el drenaje [mL].
 
-        sinks_ml_min: extracción de agua por capa (raíz), con sal en fracción salt_uptake_frac (0-1).
+        c_in: concentración de entrada por trazador (mass/mL: EC, mg/mL, pH).
+        uptake_mass: {trazador: masa quitada por capa en este paso} (absorción radicular de sal/iones).
         evap_ml_min: extracción por evaporación por capa, sin sal.
         """
         n, dz, vg, A = self.n, self.dz, self.vg, self.area
@@ -366,42 +406,46 @@ class PotColumn:
             f[i + 1] = f[i] - sinks_ml_min[i] - evap[i] - dW
         f[n] = drain / dt_min
         self.last_fluxes = f
-        self._transport_salt(dt_min, f, c_in, sinks_ml_min, salt_uptake_frac or 0.0, theta_n)
+        self._transport(dt_min, f, c_in, sinks_ml_min, evap, uptake_mass or {}, theta_n)
         return drain
 
-    def _transport_salt(self, dt_min, f, c_in, sinks, uptake_frac, theta_old):
+    def _transport(self, dt_min, f, c_in, sinks, evap, uptake_mass, theta_old):
+        """Advección *upwind* implícita hacia abajo (explícita hacia arriba) + difusión, por trazador."""
         n = self.n
         w_new = [max(t * self.layer_ml, 1e-6) for t in self.theta]
         w_old = [max(t * self.layer_ml, 1e-6) for t in theta_old]
-        s = list(self.salt)
-        c_old = [s[i] / w_old[i] for i in range(n)]
-        # transferencias hacia arriba (flujo negativo): explícitas con la concentración vieja
-        up = [0.0] * (n + 1)       # masa que sube a través de la interfaz i (de la capa i a la i-1)
-        for i in range(1, n):
-            if f[i] < 0.0:
-                up[i] = min(-f[i] * dt_min * c_old[i], 0.5 * s[i])
-        c_new_prev = c_in
-        down_out = [0.0] * n
-        for i in range(n):
-            f_in = f[i] if f[i] > 0.0 else 0.0
-            f_out = f[i + 1] if f[i + 1] > 0.0 else 0.0
-            mass_in = f_in * dt_min * c_new_prev + up[i + 1] if i < n - 1 else f_in * dt_min * c_new_prev
-            mass_out_up = up[i] if i > 0 else 0.0
-            salt_sink = sinks[i] * dt_min * uptake_frac * c_old[i]
-            base = s[i] + mass_in - mass_out_up - salt_sink
-            base = max(0.0, base)
-            # el flujo descendente sale con la concentración nueva de la capa (implícito)
-            s_new = base / (1.0 + f_out * dt_min / w_new[i])
-            c_new_prev = s_new / w_new[i]
-            down_out[i] = f_out * dt_min * c_new_prev
-            s[i] = s_new
-        # Difusión molecular entre capas vecinas
-        conc = [s[i] / w_new[i] for i in range(n)]
-        for i in range(n - 1):
-            th_avg = 0.5 * (self.theta[i] + self.theta[i + 1])
-            m = SALT_DIFF_CM2_MIN * th_avg * self.area / self.dz * (conc[i] - conc[i + 1]) * dt_min
-            m = max(-0.5 * s[i + 1], min(0.5 * s[i], m))
-            s[i] -= m
-            s[i + 1] += m
-        self.salt = s
-        self.last_salt_drained = down_out[-1]
+        self.last_drained = {}
+        for name in TRACERS:
+            s = list(self.tracers[name])
+            c_old = [s[i] / w_old[i] for i in range(n)]
+            up = [0.0] * (n + 1)       # masa que sube por la interfaz i (de la capa i a la i-1)
+            for i in range(1, n):
+                if f[i] < 0.0:
+                    up[i] = min(-f[i] * dt_min * c_old[i], 0.5 * s[i])
+            c_prev = c_in.get(name, 0.0)
+            um = uptake_mass.get(name)
+            drained = 0.0
+            for i in range(n):
+                f_in = f[i] if f[i] > 0.0 else 0.0
+                f_out = f[i + 1] if f[i + 1] > 0.0 else 0.0
+                mass_in = f_in * dt_min * c_prev + (up[i + 1] if i < n - 1 else 0.0)
+                mass_out_up = up[i] if i > 0 else 0.0
+                if name in INTENSIVE:
+                    sink = (sinks[i] + evap[i]) * dt_min * c_old[i]
+                else:
+                    sink = um[i] if um is not None else 0.0
+                base = max(0.0, s[i] + mass_in - mass_out_up - sink)
+                s_new = base / (1.0 + f_out * dt_min / w_new[i])
+                c_prev = s_new / w_new[i]
+                drained = f_out * dt_min * c_prev
+                s[i] = s_new
+            conc = [s[i] / w_new[i] for i in range(n)]
+            for i in range(n - 1):
+                th_avg = 0.5 * (self.theta[i] + self.theta[i + 1])
+                m = SALT_DIFF_CM2_MIN * th_avg * self.area / self.dz * (conc[i] - conc[i + 1]) * dt_min
+                m = max(-0.5 * s[i + 1], min(0.5 * s[i], m))
+                s[i] -= m
+                s[i + 1] += m
+            self.tracers[name] = s
+            self.last_drained[name] = drained
+        self.last_salt_drained = self.last_drained["salt"]

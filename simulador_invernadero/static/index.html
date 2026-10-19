@@ -131,6 +131,10 @@
                     <span id="cropOrgans" class="kpi-val">-- g</span>
                 </div>
                 <div class="kpi-row">
+                    <span class="kpi-label" title="Contenido de N / P / K en el tejido (% de la masa seca) y estado = contenido / objetivo. Los objetivos son valores de referencia del modelo, no medidos.">Tejido N / P / K:</span>
+                    <span id="cropTissue" class="kpi-val">--</span>
+                </div>
+                <div class="kpi-row">
                     <span class="kpi-label" title="Índice de área foliar y fotosíntesis neta del dosel.">LAI · A dosel:</span>
                     <span id="cropCarbon" class="kpi-val">--</span>
                 </div>
@@ -311,6 +315,13 @@
                     <div class="field-item"><label title="Rendimiento cuántico">α [mol CO₂/mol fotón]</label><input type="number" id="inAlpha" min="0.01" max="0.12" step="0.002" value="0.06"></div>
                     <div class="field-item"><label title="Peso específico foliar: área = masa foliar / SLW">SLW [g/m²]</label><input type="number" id="inSlw" min="10" max="120" step="1" value="45"></div>
                     <div class="field-item"><label title="Eficiencia de crecimiento">Yg [g/g CH₂O]</label><input type="number" id="inYg" min="0.3" max="0.95" step="0.01" value="0.7"></div>
+                </div>
+
+                <div class="modal-grid">
+                    <div class="field-item"><label title="Absorción activa máxima de N [mg/g raíz/día] (modelo, no medida)">Vmax N [mg/g raíz/d]</label><input type="number" id="inVmaxN" min="1" max="200" step="1" value="40"></div>
+                    <div class="field-item"><label title="Absorción activa máxima de K [mg/g raíz/día] (modelo, no medida)">Vmax K [mg/g raíz/d]</label><input type="number" id="inVmaxK" min="1" max="200" step="1" value="40"></div>
+                    <div class="field-item"><label title="Tampón del sustrato: mmol H⁺ por L y unidad de pH (modelo)">Tampón [mmol/L/pH]</label><input type="number" id="inBuffer" min="1" max="200" step="1" value="25"></div>
+                    <div class="field-item"><label title="Fracción del N absorbido como amonio (acidifica la rizosfera)">NH₄ del N [0–1]</label><input type="number" id="inNh4" min="0" max="1" step="0.01" value="0.06"></div>
                 </div>
 
                 <div class="kpi-row" style="margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 6px;">

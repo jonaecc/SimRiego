@@ -1,7 +1,7 @@
 """Pruebas de regresión del gemelo digital (sin navegador ni hardware)."""
 import unittest
 
-from physics_engine import (GreenhouseEnvironment, NutrientSolution, PlantBiology, CARBON_DEFAULTS,
+from physics_engine import (GreenhouseEnvironment, NutrientSolution, PlantBiology, CARBON_DEFAULTS, NUTRIENT_DEFAULTS,
                             canopy_photosynthesis_umol, transpiration_ml_min)
 
 
@@ -573,7 +573,7 @@ def _grow(bio, days, photoperiod=18.0, ppfd=950.0, temp=25.5, co2=400.0, flip_da
         ph = 12.0 if (flip_day is not None and d >= flip_day) else photoperiod
         for i in range(240):
             on = i * dt < ph
-            bio.update_growth(dt, 40.0, 2.0, 6.0, 200.0, 60.0, 250.0, 1.2, temp, 1.0, pot_ml=15000.0,
+            bio.update_growth(dt, 40.0, 2.0, 6.0, 1.2, temp, 1.0, pot_ml=15000.0,
                               photoperiod_hours=ph, ppfd=ppfd if on else 0.0, co2_ppm=co2, footprint_m2=0.25)
     return bio
 
@@ -675,3 +675,107 @@ class CarbonBalanceTests(unittest.TestCase):
         self.assertIsNotNone(p.advance_stage("CRECIMIENTO"))
         self.assertEqual(before, (p.biology.biomass_g, p.biology.leaf_g, p.biology.stage))
         self.assertFalse(p.biology.flower_induced)
+
+
+class NutrientBalanceTests(unittest.TestCase):
+    def _irrigate_day(self, p, sol, minutes=360):
+        """Riega 2 min cada 20 min (la luz encendida) y devuelve la masa de cada ion que entró y salió."""
+        p.valve_cmd = p.valve_open = True
+        entered = {i: 0.0 for i in "npk"}
+        drained = {i: 0.0 for i in "npk"}
+        conc = {"n": sol.n, "p": sol.p, "k": sol.k}
+        for m in range(minutes):
+            pump = (m % 20) < 2
+            before = p.total_irrigation_ml
+            for _ in range(6):
+                out = p.step(10.0, True, 1.1, 25.0, pump, sol, 1.0, ppfd=950.0, co2_ppm=800.0)
+                for i in "npk":
+                    drained[i] += p.col.last_drained.get(i, 0.0) if out["runoff_ml"] > 0 else 0.0
+            inflow = p.total_irrigation_ml - before
+            for i in "npk":
+                entered[i] += inflow * conc[i] / 1000.0
+        return entered, drained
+
+    def test_ion_mass_balance_closes(self):
+        env = GreenhouseEnvironment()
+        p = env.plants[0]
+        p.advance_stage("CRECIMIENTO")
+        sol = NutrientSolution(ec=1.2, ph=5.8, n=90.0, p=30.0, k=110.0)
+        start = {i: p.col.tracer_total(i) for i in "npk"}
+        up0 = dict(p.biology.nutrient_uptake_total)
+        entered, drained = self._irrigate_day(p, sol)
+        for i in "npk":
+            up = p.biology.nutrient_uptake_total[i] - up0[i]
+            end = p.col.tracer_total(i)
+            err = start[i] + entered[i] - drained[i] - up - end
+            self.assertLess(abs(err), 0.02 * max(1.0, entered[i]), (i, err))
+
+    def test_uptake_never_exceeds_what_the_pot_holds_and_follows_demand(self):
+        env = GreenhouseEnvironment()
+        p = env.plants[0]
+        p.advance_stage("CRECIMIENTO")
+        p.fill_uniform(40.0, 1.5, n=80.0, p=25.0, k=100.0, ph=6.0)
+        bio = p.biology
+        for i in "npk":
+            self.assertGreaterEqual(p.col.tracer_total(i), 0.0)
+        up0 = dict(bio.nutrient_uptake_total)
+        for _ in range(360):
+            p.step(10.0, True, 1.1, 25.0, False, env.solution_p1, 1.0, ppfd=950.0, co2_ppm=800.0)
+        for i in "npk":
+            self.assertGreaterEqual(p.col.tracer_total(i), -1e-9)
+            self.assertGreaterEqual(bio.nutrient_uptake_total[i], up0[i])
+        # Sin demanda (contenido sobre el máximo de lujo) la planta no absorbe nada más
+        for i in "npk":
+            bio.content[i] = 2.0 * bio.target_content(i)
+        up1 = dict(bio.nutrient_uptake_total)
+        for _ in range(120):
+            p.step(10.0, True, 1.1, 25.0, False, env.solution_p1, 1.0, ppfd=950.0, co2_ppm=800.0)
+        for i in "npk":
+            self.assertAlmostEqual(bio.nutrient_uptake_total[i], up1[i], places=6)
+
+    def test_nutrient_deficit_lowers_growth(self):
+        def grow(n_status):
+            bio = PlantBiology()
+            bio.biomass_g = 30.0
+            for i in "npk":
+                bio.content[i] = n_status * bio.target_content(i)
+            for _ in range(2 * 240):
+                bio.update_growth(0.1, 40.0, 2.0, 6.0, 1.2, 25.5, 1.0, pot_ml=15000.0, photoperiod_hours=24.0,
+                                  ppfd=950.0, co2_ppm=400.0, footprint_m2=0.25, uptake_mg={"n": 0.0, "p": 0.0, "k": 0.0})
+            return bio.biomass_g - 30.0       # crecimiento ganado en 2 días
+        self.assertLess(grow(0.55), 0.75 * grow(1.0))
+
+    def test_ec_does_not_collapse_to_zero_when_the_plant_absorbs(self):
+        env = GreenhouseEnvironment()
+        p = env.plants[0]
+        p.advance_stage("CRECIMIENTO")
+        sol = NutrientSolution(ec=1.2, ph=5.8, n=90.0, p=30.0, k=110.0)
+        self._irrigate_day(p, sol)
+        for _ in range(8 * 360):
+            p.step(10.0, True, 1.1, 25.0, False, sol, 1.0, ppfd=950.0, co2_ppm=800.0)
+        self.assertGreater(p.ec, 0.3)
+
+    def test_ph_drifts_up_with_nitrate_uptake_and_buffer_slows_it(self):
+        def run(buffer):
+            env = GreenhouseEnvironment()
+            env.set_nutrient_params({"buffer_mmol_l_ph": buffer})
+            p = env.plants[0]
+            p.advance_stage("CRECIMIENTO")
+            p.fill_uniform(40.0, 1.5, n=120.0, p=30.0, k=0.0, ph=5.8)
+            for _ in range(2 * 1440 // 4):
+                p.step(10.0, True, 1.1, 25.0, False, env.solution_p1, 1.0, ppfd=950.0, co2_ppm=800.0)
+            return p.col.mean_conc("ph")
+        low, high = run(10.0), run(100.0)
+        self.assertGreater(low, 5.8)
+        self.assertGreater(low, high)
+
+    def test_nutrient_params_are_set_by_hand_and_validated(self):
+        env = GreenhouseEnvironment()
+        applied = env.set_nutrient_params({"vmax_n": 55, "km_k": "30", "nope": 1, "vmax_p": -3,
+                                           "buffer_mmol_l_ph": float("inf"), "nh4_fraction": 0.2})
+        self.assertEqual(applied, ["km_k", "nh4_fraction", "vmax_n"])
+        for p in env.plants:
+            self.assertEqual(p.biology.nutri["vmax_n"], 55.0)
+            self.assertEqual(p.biology.nutri["vmax_p"], NUTRIENT_DEFAULTS["vmax_p"])
+        self.assertEqual(NUTRIENT_DEFAULTS["vmax_n"], 40.0)      # los defaults globales no se tocan
+        self.assertEqual(env.set_nutrient_params({"nh4_fraction": 1.5}), [])
