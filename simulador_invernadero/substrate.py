@@ -80,13 +80,13 @@ class VanGenuchten:
         return max(H_MIN, h)
 
 
-def feddes_factor(h):
-    """Fracción de extracción radicular posible con la tensión h (1 hasta −400 cm, 0 en el marchitez)."""
-    if h >= FEDDES_H3:
+def feddes_factor(h, h3=FEDDES_H3, h4=HEAD_FLOOR):
+    """Fracción de extracción radicular posible con la tensión h (1 hasta h3, 0 en el marchitez h4)."""
+    if h >= h3:
         return 1.0
-    if h <= HEAD_FLOOR:
+    if h <= h4:
         return 0.0
-    return (math.log10(-HEAD_FLOOR) - math.log10(-h)) / (math.log10(-HEAD_FLOOR) - math.log10(-FEDDES_H3))
+    return (math.log10(-h4) - math.log10(-h)) / (math.log10(-h4) - math.log10(-h3))
 
 
 class PotColumn:
@@ -100,6 +100,7 @@ class PotColumn:
         self.tracers = {name: [0.0] * self.n for name in TRACERS}
         self.last_fluxes = [0.0] * (self.n + 1)   # mL/min, + hacia abajo (0 = entrada, n = drenaje)
         self.sensor_z0, self.sensor_z1 = 0.15, 0.50   # el sensor promedia entre estas fracciones de profundidad
+        self.h_onset, self.h_wilt = FEDDES_H3, HEAD_FLOOR   # tensión de inicio de estrés y de marchitez [cm] (manual)
         self._rw_cache = {}
 
     # ── Geometría y sustrato ────────────────────────────────────────────────
@@ -243,7 +244,7 @@ class PotColumn:
         return sum(self.equilibrium_theta()) * self.layer_ml
 
     def wilting_vwc(self):
-        return 100.0 * self.vg.theta(HEAD_FLOOR)
+        return 100.0 * self.vg.theta(self.h_wilt)
 
     # ── Raíces ──────────────────────────────────────────────────────────────
     def root_weights(self, root_g):
@@ -262,15 +263,15 @@ class PotColumn:
         self._rw_cache["k"] = (key, w)
         return w
 
-    def allocate_uptake(self, demand_ml_min, dt_min, root_g, floor_head=HEAD_FLOOR, heads=None):
+    def allocate_uptake(self, demand_ml_min, dt_min, root_g, floor_head=None, heads=None):
         """Reparte la demanda transpirativa entre capas (compensación: lo que no da una capa lo da otra).
 
         Devuelve (mL por minuto por capa, total efectivo).
         """
         w = self.root_weights(root_g)
         h = heads if heads is not None else self.heads()
-        om = [wi * feddes_factor(hi) for wi, hi in zip(w, h)]
-        floor = [self.vg.theta(floor_head)] * self.n
+        om = [wi * feddes_factor(hi, self.h_onset, self.h_wilt) for wi, hi in zip(w, h)]
+        floor = [self.vg.theta(self.h_wilt if floor_head is None else floor_head)] * self.n
         avail = [max(0.0, (t - f) * self.layer_ml) / max(dt_min, 1e-9) for t, f in zip(self.theta, floor)]
         out = [0.0] * self.n
         remaining = max(0.0, demand_ml_min)
@@ -288,6 +289,23 @@ class PotColumn:
                 given += take
             remaining -= given
         return out, sum(out)
+
+    def effective_heads(self, heads, osm_cm_per_ms, ec_tol):
+        """Tensión total que ve la raíz: matricial más osmótica de la sal sobre la que la planta tolera."""
+        ec = self.ec_layers()
+        return [h - osm_cm_per_ms * max(0.0, e - ec_tol) for h, e in zip(heads, ec)]
+
+    def supply_factor(self, root_g, eff_heads, compensation=0.5):
+        """Factor de suministro de agua (1 = sin estrés): extracción posible ponderada por raíz con
+        compensación entre capas (si la mitad de las raíces está bien, la planta no sufre)."""
+        w = self.root_weights(root_g)
+        f = sum(wi * feddes_factor(h, self.h_onset, self.h_wilt) for wi, h in zip(w, eff_heads))
+        return max(0.0, min(1.0, f / max(compensation, 1e-6)))
+
+    def air_porosity_pct(self, root_g):
+        """Porosidad con aire (θs − θ) ponderada por la raíz [%]."""
+        w = self.root_weights(root_g)
+        return 100.0 * sum(wi * max(0.0, self.vg.ts - t) for wi, t in zip(w, self.theta))
 
     def evaporation(self, demand_ml_min, dt_min):
         """Evaporación desde las dos capas superiores hasta un piso de 3000 cm de tensión."""

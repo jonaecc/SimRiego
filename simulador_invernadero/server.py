@@ -84,6 +84,8 @@ async def websocket_endpoint(websocket: WebSocket):
                     env.set_carbon_params(msg.get("params", {}))
                 elif cmd == "set_nutrient":
                     env.set_nutrient_params(msg.get("params", {}))
+                elif cmd == "set_stress":
+                    env.set_stress_params(msg.get("params", {}))
                 elif cmd == "update_solution":
                     env.update_solution(msg.get("pump", "P1"), msg.get("solution", {}))
                 elif cmd == "select_plant":

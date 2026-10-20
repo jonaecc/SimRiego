@@ -302,10 +302,10 @@ NUTRIENT_DEFAULTS = {
     "x_n_leaf": 3.1, "x_n_stem": 1.2, "x_n_root": 2.5, "x_n_flower": 3.8,
     "x_p_leaf": 0.8, "x_p_stem": 0.4, "x_p_root": 0.9, "x_p_flower": 1.1,
     "x_k_leaf": 2.5, "x_k_stem": 2.8, "x_k_root": 2.0, "x_k_flower": 2.3,
-    "vmax_n": 40.0,       # absorción activa máxima [mg ion / g raíz seca / día] [modelo]
+    "vmax_n": 60.0,       # absorción activa máxima [mg ion / g raíz seca / día]; N ajustado al ensayo de Saloner y Bernstein 2020 (30 mg/L N: fotosíntesis −27 %)
     "vmax_p": 8.0,
     "vmax_k": 40.0,
-    "km_n": 15.0,         # constante de Michaelis [mg/L en el agua de poro] [modelo]
+    "km_n": 250.0,        # constante de Michaelis [mg/L en el agua de poro]; N ajustado al mismo ensayo
     "km_p": 3.0,
     "km_k": 20.0,
     "catchup_days": 2.0,  # días en que la planta intenta cubrir un déficit de tejido [modelo]
@@ -315,6 +315,29 @@ NUTRIENT_DEFAULTS = {
     "buffer_mmol_l_ph": 25.0, # capacidad tampón del sustrato [mmol H+/L por unidad de pH] [modelo]
 }
 ION_ORGANS = ("leaf", "stem", "root", "flower")
+
+# Respuestas a estrés y fenología. Todos son valores de partida editables a mano; los marcados [calibrar]
+# no tienen dato medido en cannabis (ver el documento de modelo biológico).
+STRESS_DEFAULTS = {
+    "tension_onset_cm": 400.0,   # tensión del sustrato desde la que la raíz extrae menos agua [cm] [calibrar]
+    "tension_wilt_cm": 15000.0,  # tensión a la que la extracción es nula [cm] [calibrar]
+    "root_compensation": 0.5,    # fracción de raíz sana suficiente para no sufrir sequía [calibrar]
+    "osm_cm_per_ms": 367.0,      # tensión osmótica por mS/cm de CE sobre la tolerada (π≈0,036 MPa por dS/m)
+    "ec_tol_seedling": 2.2,      # CE de poro tolerada sin pérdida [mS/cm] por etapa [calibrar]
+    "ec_tol_veg": 3.6,
+    "ec_tol_flower": 5.2,
+    "ec_slope": 0.4545,          # estrés por mS/cm sobre la tolerancia (Maas–Hoffman) [calibrar]
+    "salt_root_damage": 3.0,     # % de salud de raíz perdida por día con estrés salino completo [calibrar]
+    "ap_crit_pct": 8.0,          # porosidad con aire bajo la que empieza la hipoxia [%]; en contenedor estándar hay 10,7–13,5 % y en celdas de plántula 3–4 % [calibrar]
+    "ap_span_pct": 8.0,          # rango de porosidad con aire hasta la hipoxia total [%]
+    "hypoxia_root_damage": 6.0,  # % de salud de raíz perdida por día con hipoxia total [calibrar]
+    "critical_photoperiod_h": 13.5,  # fotoperiodo máximo que induce la floración [h]
+    "induction_days": 3.0,       # días cortos acumulados para inducir la floración [calibrar]
+    "dev_tbase_c": 8.0,          # temperatura base del desarrollo [°C] [calibrar]
+    "dev_topt_c": 25.0,          # temperatura de desarrollo más rápido [°C]
+    "dev_tmax_c": 38.0,          # temperatura a la que el desarrollo se detiene [°C]
+    "dev_tref_c": 23.9,          # temperatura media con la que las etapas duran los días configurados
+}
 
 
 def canopy_photosynthesis_umol(ppfd, lai, temp_c, co2_ppm, params, stress=1.0):
@@ -357,6 +380,10 @@ class PlantBiology:
         self.vigor_factor = vigor_factor   # Variabilidad genética natural (0.85 a 1.20)
         self.params = dict(CARBON_DEFAULTS)
         self.nutri = dict(NUTRIENT_DEFAULTS)
+        self.stress = dict(STRESS_DEFAULTS)
+        self.stress_factor = 1.0           # factor combinado de estrés sobre la fotosíntesis (1 = sin estrés)
+        self.short_day_count = 0.0         # días cortos acumulados hacia la inducción
+        self.dev_offset = 0.0              # días de desarrollo ganados o perdidos por temperatura
 
         self.age_days = 1.0
         self.height_cm = 5.0 * vigor_factor
@@ -437,7 +464,27 @@ class PlantBiology:
 
     @property
     def flower_days(self):
-        return max(0.0, self.age_days - self.flower_induction_day) if self.flower_induced else 0.0
+        return max(0.0, self.age_days - self.flower_induction_day + self.dev_offset) if self.flower_induced else 0.0
+
+    def dev_rate(self, temp):
+        """Velocidad de desarrollo relativa a la temperatura de referencia (1 = días configurados)."""
+        st = self.stress
+
+        def lin(t):
+            if t <= st["dev_tbase_c"] or t >= st["dev_tmax_c"]:
+                return 0.0
+            if t <= st["dev_topt_c"]:
+                return (t - st["dev_tbase_c"]) / (st["dev_topt_c"] - st["dev_tbase_c"])
+            return (st["dev_tmax_c"] - t) / (st["dev_tmax_c"] - st["dev_topt_c"])
+        return lin(temp) / max(lin(st["dev_tref_c"]), 1e-6)
+
+    def ec_tolerance(self):
+        st = self.stress
+        if self.stage == CropStage.GERMINATION:
+            return st["ec_tol_seedling"]
+        if self.stage == CropStage.VEGETATIVE:
+            return st["ec_tol_veg"]
+        return st["ec_tol_flower"]
 
     # ── Nutrición ───────────────────────────────────────────────────────────
     def organ_mass(self, organ):
@@ -479,6 +526,8 @@ class PlantBiology:
             self.height_cm = 8.0 * self.vigor_factor
             self._set_organs(2.5 * self.vigor_factor, 0.25, 0.55, 0.20, 0.0)
             self.flower_induced = False
+            self.short_day_count = 0.0
+            self.dev_offset = 0.0
             self.leaf_senescence = 0.0
             self.buds_size = 0.0
             self.trichomes_amber = 0.0
@@ -491,6 +540,8 @@ class PlantBiology:
             self._set_organs(42.0 * self.vigor_factor, p["root_frac"],
                              shoot * p["leaf_frac_shoot"], shoot * (1.0 - p["leaf_frac_shoot"]), 0.0)
             self.flower_induced = False
+            self.short_day_count = 0.0
+            self.dev_offset = 0.0
             self.leaf_senescence = 0.0
             self.buds_size = 0.0
             self.trichomes_amber = 0.0
@@ -500,6 +551,7 @@ class PlantBiology:
             self.age_days = 48.0
             self.flower_induced = True
             self.flower_induction_day = 30.0
+            self.dev_offset = 0.0
             self.height_cm = 72.0 * self.vigor_factor
             total = 105.0 * self.vigor_factor
             self.buds_size = 0.45
@@ -513,16 +565,28 @@ class PlantBiology:
             self.root_health = 98.0
         self.content = {ion: self.target_content(ion) for ion in "npk"}   # tejidos en su objetivo tras el reinicio
 
-    def _update_phenology(self, photoperiod_hours):
-        """Fase biológica por fotoperiodo y edad (independiente de la etapa de manejo de riego)."""
-        p = self.params
+    def _update_phenology(self, photoperiod_hours, temp=25.0, dt_days=0.0):
+        """Fase biológica por fotoperiodo, edad y temperatura (independiente de la etapa de riego).
+
+        La floración se induce tras acumular `induction_days` días con fotoperiodo ≤ crítico; un día largo
+        antes de la inducción descuenta ese avance. Después, las etapas avanzan con los días desde la
+        inducción, acelerados o frenados por la temperatura (tiempo térmico)."""
+        p, st = self.params, self.stress
         if self.age_days < 10.0:
             self.stage = CropStage.GERMINATION
             return
         is_auto = (self.flowering_type == "AUTOFLORECIENTE")
-        if not self.flower_induced and (photoperiod_hours <= 13.5 or (is_auto and self.age_days >= 28.0)):
-            self.flower_induced = True
-            self.flower_induction_day = self.age_days
+        if not self.flower_induced:
+            if photoperiod_hours <= st["critical_photoperiod_h"]:
+                self.short_day_count += dt_days
+            else:
+                self.short_day_count = max(0.0, self.short_day_count - dt_days)
+            if self.short_day_count >= st["induction_days"] or (is_auto and self.age_days >= 28.0):
+                self.flower_induced = True
+                self.flower_induction_day = self.age_days
+                self.dev_offset = 0.0
+        elif dt_days > 0.0:
+            self.dev_offset += (self.dev_rate(temp) - 1.0) * dt_days
         if self.flower_induced:
             d = self.flower_days
             if d < p["stretch_days"]:
@@ -555,26 +619,34 @@ class PlantBiology:
 
     def update_growth(self, dt_hours, vwc, ec, ph, vpd, temp, light_exposure,
                       pot_ml=5000.0, photoperiod_hours=18.0, ppfd=0.0, co2_ppm=400.0, footprint_m2=0.25,
-                      uptake_mg=None):
-        """uptake_mg: {"n","p","k"} mg absorbidos en este paso. Si es None (uso aislado) la planta
+                      uptake_mg=None, water_supply=None, air_porosity_pct=None):
+        """water_supply: factor 0–1 de suministro de agua de la raíz (tensión total, con sal); air_porosity_pct:
+        porosidad con aire en la zona radicular [%]. Si faltan (uso aislado) se estiman con el VWC.
+        uptake_mg: {"n","p","k"} mg absorbidos en este paso. Si es None (uso aislado) la planta
         se alimenta idealmente: absorbe justo lo que demanda."""
         p = self.params
         dt_days = dt_hours / 24.0
         self.age_days += dt_days
-        self._update_phenology(photoperiod_hours)
+        self._update_phenology(photoperiod_hours, temp, dt_days)
 
         # Senescencia foliar al final de la floración
         if self.flower_induced:
             self.leaf_senescence = max(self.leaf_senescence, min(
                 0.6, (self.flower_days - p["senescence_start"]) / p["senescence_span"]))
 
-        # 1. Estrés hídrico (diferenciado para plántula y adulto), hipoxia y raíz
-        if self.stage == CropStage.GERMINATION:
+        # 1. Estrés hídrico (suministro de la raíz), hipoxia (porosidad con aire) y salud de raíz
+        st = self.stress
+        if water_supply is not None:
+            water_stress = max(0.0, min(1.0, 1.0 - water_supply))
+        elif self.stage == CropStage.GERMINATION:
             water_stress = max(0.0, min(1.0, (38.0 - vwc) / 20.0)) if vwc < 38.0 else 0.0
         else:
             water_stress = max(0.0, min(1.0, (24.0 - vwc) / 14.0)) if vwc < 24.0 else 0.0
-        hypoxia = max(0.0, min(1.0, (vwc - 66.0) / 20.0)) if vwc > 66.0 else 0.0
-        self.root_health = max(10.0, min(100.0, self.root_health + (2.0 - hypoxia * 6.0) * dt_days))
+        if air_porosity_pct is not None:
+            hypoxia = max(0.0, min(1.0, (st["ap_crit_pct"] - air_porosity_pct) / st["ap_span_pct"]))
+        else:
+            hypoxia = max(0.0, min(1.0, (vwc - 66.0) / 20.0)) if vwc > 66.0 else 0.0
+        self.root_health = max(10.0, min(100.0, self.root_health + (2.0 - hypoxia * st["hypoxia_root_damage"]) * dt_days))
 
         # 2. Maceta pequeña sin trasplantar (restricción radicular)
         pot_biomass_limit = (pot_ml / 500.0) * 12.0
@@ -584,9 +656,9 @@ class PlantBiology:
             rootbound_stress = min(0.65, over * 0.40)
             self.root_health = max(10.0, self.root_health - rootbound_stress * 3.5 * dt_days)
 
-        # 3. Estrés por EC y pH
-        target_ec_max = 2.2 if self.stage == CropStage.GERMINATION else (3.6 if self.stage == CropStage.VEGETATIVE else 5.2)
-        ec_stress = max(0.0, min(1.0, (ec - target_ec_max) / 2.2)) if ec > target_ec_max else 0.0
+        # 3. Estrés salino (Maas–Hoffman: umbral por etapa y pendiente) y de pH
+        ec_stress = max(0.0, min(1.0, st["ec_slope"] * (ec - self.ec_tolerance())))
+        self.root_health = max(10.0, self.root_health - ec_stress * st["salt_root_damage"] * dt_days)
         ph_stress = max(0.0, min(1.0, (5.5 - ph) / 0.7, (ph - 6.5) / 0.7))
 
         # Nutrición: el tejido recibe lo absorbido; el estado (contenido/objetivo) limita la fotosíntesis.
@@ -612,6 +684,7 @@ class PlantBiology:
         lai = self.leaf_area_m2 / footprint_m2
         stress = ((1.0 - 0.85 * combined_stress) * (0.35 + 0.65 * nutrition_factor)
                   * (0.4 + 0.6 * self.root_health / 100.0) * self.vigor_factor)
+        self.stress_factor = stress
         a_c = canopy_photosynthesis_umol(ppfd_canopy, lai, temp, co2_ppm, p, stress)
         self.a_canopy = a_c
         dt_s = dt_hours * 3600.0
@@ -702,6 +775,7 @@ class GreenhousePlantPhysics:
         self._pot_ml = 3500.0
         self.col = PotColumn(self._pot_ml, "COCO", alpha_scale=compaction)
         self._col_acc = self._new_acc()
+        self.last_temp = 25.0
         self.cc_source = "model"            # "model" (derivada de la curva), "test" (ensayo CC) o "manual"
         self.vwc_cc = self.col.capacity_sensor_vwc()
         self.vwc_pmp = 15.0
@@ -981,6 +1055,7 @@ class GreenhousePlantPhysics:
              footprint_m2=0.25, aero_cond_m_s=0.02):
         dt_min = dt_seconds / 60.0
         dt_hours = dt_seconds / 3600.0
+        self.last_temp = temp
         
         # 1. Transición mecánica de la electroválvula (400 ms)
         if self.valve_cmd != self.valve_open:
@@ -1001,7 +1076,13 @@ class GreenhousePlantPhysics:
         heads = self.col.heads()
         rw = self.col.root_weights(self.biology.root_g)
         vwc_root_now = 100.0 * sum(wi * t for wi, t in zip(rw, self.col.theta))
-        water_stress = 1.0 if vwc_root_now >= 25.0 else max(0.05, (vwc_root_now - self.vwc_pmp) / 10.0)
+        # Suministro de agua de la raíz: tensión matricial más osmótica (la sal sobre lo tolerado) por capa,
+        # con compensación entre capas. Cierra los estomas (Penman-Monteith) y entra al estrés del cultivo.
+        stc = self.biology.stress
+        eff_heads = self.col.effective_heads(heads, stc["osm_cm_per_ms"], self.biology.ec_tolerance())
+        supply = self.col.supply_factor(self.biology.root_g, eff_heads, stc["root_compensation"])
+        water_stress = max(0.05, supply)
+        air_pct = self.col.air_porosity_pct(self.biology.root_g)
         et_trans = transpiration_ml_min(leaf_m2, footprint_m2, ppfd * light_exposure, vpd, temp,
                                         co2_ppm, aero_cond_m_s, is_day, water_stress)
         pot_area_m2 = pot_surface_area_m2(self.pot_ml)
@@ -1012,7 +1093,7 @@ class GreenhousePlantPhysics:
 
         # La raíz toma el agua de las capas según su distribución y la tensión de cada una
         # (compensación entre capas); la evaporación sale de las capas superiores y deja las sales.
-        uptake_layers, trans_rate = self.col.allocate_uptake(et_trans, dt_min, self.biology.root_g, heads=heads)
+        uptake_layers, trans_rate = self.col.allocate_uptake(et_trans, dt_min, self.biology.root_g, heads=eff_heads)
         evap_layers, evap_rate = self.col.evaporation(et_evap, dt_min)
         self.total_et_ml += (trans_rate + evap_rate) * dt_min
 
@@ -1078,7 +1159,8 @@ class GreenhousePlantPhysics:
                 vpd, temp, light_exposure,
                 pot_ml=self.pot_ml,
                 photoperiod_hours=photoperiod_hours,
-                ppfd=ppfd, co2_ppm=co2_ppm, footprint_m2=footprint_m2, uptake_mg=uptake_mg
+                ppfd=ppfd, co2_ppm=co2_ppm, footprint_m2=footprint_m2, uptake_mg=uptake_mg,
+                water_supply=supply, air_porosity_pct=air_pct
             )
         if runoff_ml > 0.0:
             self.tray_ml += runoff_ml
@@ -1803,6 +1885,41 @@ class GreenhouseEnvironment:
             p.biology.params.update(applied)
         return sorted(applied)
 
+    def set_stress_params(self, values):
+        """Cambia a MANO las respuestas a estrés y la fenología en todas las plantas.
+
+        Solo acepta claves de STRESS_DEFAULTS con valores numéricos finitos y positivos; la tensión de
+        inicio debe ser menor que la de marchitez y la compensación, la fracción de NH4… no pasan de 1.
+        Los parámetros nunca cambian solos. Devuelve las claves aplicadas."""
+        applied = {}
+        for key, val in (values or {}).items():
+            if key not in STRESS_DEFAULTS:
+                continue
+            try:
+                v = float(val)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(v) or v <= 0.0:
+                continue
+            if key == "root_compensation" and v > 1.0:
+                continue
+            applied[key] = v
+        cur = self.plants[0].biology.stress
+        onset = applied.get("tension_onset_cm", cur["tension_onset_cm"])
+        wilt = applied.get("tension_wilt_cm", cur["tension_wilt_cm"])
+        if onset >= wilt:
+            applied.pop("tension_onset_cm", None)
+            applied.pop("tension_wilt_cm", None)
+        topt = applied.get("dev_topt_c", cur["dev_topt_c"])
+        if not (applied.get("dev_tbase_c", cur["dev_tbase_c"]) < topt < applied.get("dev_tmax_c", cur["dev_tmax_c"])):
+            for k in ("dev_tbase_c", "dev_topt_c", "dev_tmax_c"):
+                applied.pop(k, None)
+        for p in self.plants:
+            p.biology.stress.update(applied)
+            p.col.h_onset = -p.biology.stress["tension_onset_cm"]
+            p.col.h_wilt = -p.biology.stress["tension_wilt_cm"]
+        return sorted(applied)
+
     def set_nutrient_params(self, values):
         """Cambia a MANO parámetros de la nutrición por ion (contenido objetivo en tejido, Vmax, Km,
         tampón del sustrato, fracción amoniacal…). Solo acepta claves de NUTRIENT_DEFAULTS con valores
@@ -2108,6 +2225,14 @@ class GreenhouseEnvironment:
                 "nutrient_status": {i: round(bio.nutrient_status[i], 2) for i in "npk"},
                 "nutrient_uptake_mg": {i: round(bio.nutrient_uptake_total[i], 1) for i in "npk"},
                 "nutrient_params": dict(bio.nutri),
+                "stress_params": dict(bio.stress),
+                "water_supply": round(sel_p.col.supply_factor(bio.root_g, sel_p.col.effective_heads(
+                    sel_p.col.heads(), bio.stress["osm_cm_per_ms"], bio.ec_tolerance()), bio.stress["root_compensation"]), 2),
+                "air_porosity_pct": round(sel_p.col.air_porosity_pct(bio.root_g), 1),
+                "stress_factor": round(bio.stress_factor, 2),
+                "short_day_count": round(bio.short_day_count, 1),
+                "flower_days": round(bio.flower_days, 1),
+                "dev_rate": round(bio.dev_rate(sel_p.last_temp), 2),
                 "total_et_ml": round(sel_p.total_et_ml, 0),
                 "root_health_pct": round(bio.root_health, 0),
                 "buds_size_pct": round(bio.buds_size * 100.0, 1),

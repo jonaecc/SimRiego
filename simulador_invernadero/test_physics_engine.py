@@ -1,7 +1,7 @@
 """Pruebas de regresión del gemelo digital (sin navegador ni hardware)."""
 import unittest
 
-from physics_engine import (GreenhouseEnvironment, NutrientSolution, PlantBiology, CARBON_DEFAULTS, NUTRIENT_DEFAULTS,
+from physics_engine import (GreenhouseEnvironment, NutrientSolution, PlantBiology, CARBON_DEFAULTS, NUTRIENT_DEFAULTS, STRESS_DEFAULTS,
                             canopy_photosynthesis_umol, transpiration_ml_min)
 
 
@@ -530,6 +530,11 @@ class CropPlanTests(unittest.TestCase):
         self.assertEqual((self.env.light_off_hour - self.env.light_on_hour) % 24.0, 12.0)
         for _ in range(20):
             self.env.step(15.0 / self.env.time_speed)
+        self.assertFalse(p.biology.flower_induced)          # la inducción necesita varios días cortos seguidos
+        self.assertGreater(p.biology.short_day_count, 0.0)  # pero el conteo ya avanza con el 12/12
+        p.biology.short_day_count = p.biology.stress["induction_days"] - 1e-4
+        for _ in range(20):
+            self.env.step(15.0 / self.env.time_speed)
         self.assertTrue(p.biology.flower_induced)
 
     def test_crop_plan_validation_and_non_active_profile_edit(self):
@@ -787,5 +792,176 @@ class NutrientBalanceTests(unittest.TestCase):
         for p in env.plants:
             self.assertEqual(p.biology.nutri["vmax_n"], 55.0)
             self.assertEqual(p.biology.nutri["vmax_p"], NUTRIENT_DEFAULTS["vmax_p"])
-        self.assertEqual(NUTRIENT_DEFAULTS["vmax_n"], 40.0)      # los defaults globales no se tocan
+        self.assertEqual(NUTRIENT_DEFAULTS["vmax_n"], 60.0)      # los defaults globales no se tocan
         self.assertEqual(env.set_nutrient_params({"nh4_fraction": 1.5}), [])
+
+
+class StressAndPhenologyTests(unittest.TestCase):
+    """Cada estrés debe reproducir su dato publicado cuando hay uno; si no, solo coherencia y monotonía."""
+
+    def test_nitrogen_supply_30_vs_160_mg_l_cuts_photosynthesis_about_a_quarter(self):
+        """Saloner y Bernstein 2020: a 30 mg/L de N la fotosíntesis cae ~25 % respecto del óptimo (160 mg/L)."""
+        def run(n_ppm):
+            env = GreenhouseEnvironment()
+            p = env.plants[0]
+            sol = NutrientSolution(ec=0.5 + n_ppm / 90.0, ph=5.9, n=n_ppm, p=40.0, k=160.0)
+            p.valve_cmd = p.valve_open = True
+            sf = []
+            for i in range(14 * 1440):
+                minute = i % 1440
+                day = minute < 18 * 60
+                pump = day and (minute % 30) < 2
+                p.step(60.0, day, 1.1, 25.5 if day else 19.0, pump, sol, 1.0, ppfd=950.0 if day else 0.0, co2_ppm=400.0)
+                if day and i >= 12 * 1440:
+                    sf.append(p.biology.stress_factor)
+            return sum(sf) / len(sf)
+        ratio = run(30.0) / run(160.0)
+        self.assertGreater(ratio, 0.65)
+        self.assertLess(ratio, 0.85)
+
+    def test_temperature_response_has_a_plateau_between_25_and_30_c(self):
+        a = {t: canopy_photosynthesis_umol(950.0, 3.0, t, 400.0, CARBON_DEFAULTS) for t in (10, 15, 25, 27, 30, 36, 40)}
+        top = max(a.values())
+        for t in (25, 27, 30):
+            self.assertGreater(a[t], 0.92 * top, t)       # óptimo 25–30 °C (Chandra et al. 2008)
+        self.assertLess(a[15], 0.75 * top)
+        self.assertLess(a[36], 0.6 * top)
+        self.assertLess(a[10], a[15])
+        self.assertLess(a[40], a[36])
+
+    def test_leaf_light_saturates_near_1400_and_co2_raises_leaf_photosynthesis_by_half(self):
+        leaf = lambda i, c=400.0: canopy_photosynthesis_umol(i, 0.05, 26.0, c, CARBON_DEFAULTS) / 0.05
+        self.assertGreater(leaf(1450.0), 0.85 * leaf(2500.0))        # satura hacia 1370–1530 µmol/m²/s
+        self.assertLess(leaf(2000.0), 1.08 * leaf(1500.0))
+        self.assertAlmostEqual(leaf(6000.0, 750.0) / leaf(6000.0, 350.0), 1.5, delta=0.05)   # +50 % a 750 ppm con luz saturante
+
+    def test_water_supply_falls_with_tension_and_with_salt_above_tolerance(self):
+        env = GreenhouseEnvironment()
+        col = env.plants[0].col
+        root_g = 8.0
+        sup = lambda h: col.supply_factor(root_g, [h] * col.n, 0.5)
+        self.assertEqual(sup(-100.0), 1.0)
+        self.assertEqual(sup(-300.0), 1.0)
+        vals = [sup(h) for h in (-500.0, -1500.0, -6000.0, -14000.0)]
+        self.assertEqual(vals, sorted(vals, reverse=True))
+        self.assertEqual(sup(-20000.0), 0.0)
+        # la sal por encima de la tolerada agrega tensión osmótica
+        col.set_uniform("salt", 14.0)
+        salty = col.effective_heads([-300.0] * col.n, 367.0, 3.6)
+        for h in salty:
+            self.assertAlmostEqual(h, -300.0 - 367.0 * (14.0 - 3.6), delta=1.0)
+        self.assertLess(col.supply_factor(root_g, salty, 0.5), 1.0)
+        self.assertEqual(col.supply_factor(root_g, col.effective_heads([-300.0] * col.n, 367.0, 9.0), 0.5), 1.0)
+
+    def test_root_compensation_means_half_healthy_roots_do_not_suffer(self):
+        env = GreenhouseEnvironment()
+        col = env.plants[0].col
+        n = col.n
+        w = col.root_weights(8.0)
+        heads = [-100.0] * n
+        dry = [-15000.0] * n
+        mixed = [(-100.0 if i < n // 2 else -14000.0) for i in range(n)]
+        self.assertEqual(col.supply_factor(8.0, heads, 0.5), 1.0)
+        self.assertEqual(col.supply_factor(8.0, dry, 0.5), 0.0)
+        upper = sum(w[: n // 2])
+        self.assertAlmostEqual(col.supply_factor(8.0, mixed, 0.5), min(1.0, upper / 0.5), places=6)
+
+    def test_drought_closes_stomata_and_slows_growth(self):
+        def run(supply):
+            bio = PlantBiology()
+            bio.biomass_g = 30.0
+            for _ in range(2 * 240):
+                bio.update_growth(0.1, 40.0, 2.0, 6.0, 1.2, 25.5, 1.0, pot_ml=15000.0, photoperiod_hours=18.0,
+                                  ppfd=950.0, co2_ppm=400.0, footprint_m2=0.25, water_supply=supply, air_porosity_pct=20.0)
+            return bio.biomass_g - 30.0
+        self.assertGreater(run(1.0), run(0.6))
+        self.assertGreater(run(0.6), run(0.2))
+
+    def test_hypoxia_follows_air_porosity_and_damages_roots_with_memory(self):
+        def run(ap, days=4):
+            bio = PlantBiology()
+            bio.biomass_g = 30.0
+            for _ in range(days * 240):
+                bio.update_growth(0.1, 40.0, 2.0, 6.0, 1.2, 25.5, 1.0, pot_ml=15000.0, photoperiod_hours=18.0,
+                                  ppfd=950.0, co2_ppm=400.0, footprint_m2=0.25, water_supply=1.0, air_porosity_pct=ap)
+            return bio
+        normal = run(12.0)       # contenedor estándar: 10,7–13,5 % de aire
+        self.assertEqual(normal.root_health, 100.0)
+        self.assertEqual(normal.leaf_droop, 0.0)
+        flooded = run(0.0)
+        self.assertLess(flooded.root_health, 90.0)
+        self.assertGreater(flooded.leaf_droop, 0.3)
+        # la salud de raíz no se recupera de golpe: vuelve a ~2 %/día
+        h0 = flooded.root_health
+        for _ in range(240):
+            flooded.update_growth(0.1, 40.0, 2.0, 6.0, 1.2, 25.5, 1.0, pot_ml=15000.0, photoperiod_hours=18.0,
+                                  ppfd=950.0, co2_ppm=400.0, footprint_m2=0.25, water_supply=1.0, air_porosity_pct=20.0)
+        self.assertGreater(flooded.root_health, h0)
+        self.assertLess(flooded.root_health, h0 + 3.0)
+
+    def test_salinity_uses_stage_tolerance_and_harms_roots_above_it(self):
+        def run(ec, stage_age):
+            bio = PlantBiology()
+            bio.age_days = stage_age
+            bio.biomass_g = 30.0
+            for _ in range(240):
+                bio.update_growth(0.1, 40.0, ec, 6.0, 1.2, 25.5, 1.0, pot_ml=15000.0, photoperiod_hours=18.0,
+                                  ppfd=950.0, co2_ppm=400.0, footprint_m2=0.25, water_supply=1.0, air_porosity_pct=20.0)
+            return bio
+        self.assertEqual(run(3.0, 30.0).root_health, 100.0)       # vegetativo tolera 3,6
+        self.assertLess(run(6.0, 30.0).root_health, 100.0)
+        self.assertLess(run(3.0, 5.0).root_health, 100.0)         # plántula solo tolera 2,2
+        self.assertGreater(run(6.0, 30.0).tip_burn, 0.3)
+
+    def test_flowering_needs_consecutive_short_days_and_a_long_day_undoes_progress(self):
+        bio = PlantBiology()
+        bio.age_days = 30.0
+        dt = 0.1
+        for _ in range(int(1.5 * 240)):                           # 1,5 días de 12 h
+            bio.update_growth(dt, 40.0, 2.0, 6.0, 1.2, 25.0, 1.0, pot_ml=15000.0, photoperiod_hours=12.0,
+                              ppfd=0.0, co2_ppm=400.0, footprint_m2=0.25)
+        self.assertFalse(bio.flower_induced)
+        self.assertAlmostEqual(bio.short_day_count, 1.5, delta=0.05)
+        for _ in range(240):                                      # un día largo descuenta
+            bio.update_growth(dt, 40.0, 2.0, 6.0, 1.2, 25.0, 1.0, pot_ml=15000.0, photoperiod_hours=18.0,
+                              ppfd=0.0, co2_ppm=400.0, footprint_m2=0.25)
+        self.assertAlmostEqual(bio.short_day_count, 0.5, delta=0.05)
+        self.assertLess(bio.short_day_count, 0.6)
+        for _ in range(int(3.2 * 240)):
+            bio.update_growth(dt, 40.0, 2.0, 6.0, 1.2, 25.0, 1.0, pot_ml=15000.0, photoperiod_hours=12.0,
+                              ppfd=0.0, co2_ppm=400.0, footprint_m2=0.25)
+        self.assertTrue(bio.flower_induced)
+
+    def test_development_rate_follows_temperature(self):
+        bio = PlantBiology()
+        ref = bio.stress["dev_tref_c"]
+        self.assertAlmostEqual(bio.dev_rate(ref), 1.0, places=6)
+        self.assertGreater(bio.dev_rate(25.0), bio.dev_rate(18.0))
+        self.assertGreater(bio.dev_rate(18.0), bio.dev_rate(12.0))
+        self.assertLess(bio.dev_rate(33.0), bio.dev_rate(25.0))
+        self.assertEqual(bio.dev_rate(5.0), 0.0)
+        self.assertEqual(bio.dev_rate(40.0), 0.0)
+
+        def flower_days_after(temp):
+            b = PlantBiology()
+            b.age_days = 40.0
+            b.flower_induced, b.flower_induction_day = True, 40.0
+            for _ in range(5 * 240):
+                b.update_growth(0.1, 40.0, 2.0, 6.0, 1.2, temp, 1.0, pot_ml=15000.0, photoperiod_hours=12.0,
+                                ppfd=0.0, co2_ppm=400.0, footprint_m2=0.25)
+            return b.flower_days
+        self.assertGreater(flower_days_after(26.0), flower_days_after(18.0))
+        self.assertAlmostEqual(flower_days_after(ref), 5.0, delta=0.05)
+
+    def test_stress_params_are_set_by_hand_and_validated(self):
+        env = GreenhouseEnvironment()
+        applied = env.set_stress_params({"tension_onset_cm": 1000, "ec_tol_veg": "4.0", "nope": 1,
+                                         "ap_crit_pct": -1, "root_compensation": 2.0, "induction_days": float("nan")})
+        self.assertEqual(applied, ["ec_tol_veg", "tension_onset_cm"])
+        for p in env.plants:
+            self.assertEqual(p.biology.stress["tension_onset_cm"], 1000.0)
+            self.assertEqual(p.col.h_onset, -1000.0)
+            self.assertEqual(p.biology.stress["ap_crit_pct"], STRESS_DEFAULTS["ap_crit_pct"])
+        self.assertEqual(STRESS_DEFAULTS["tension_onset_cm"], 400.0)          # los defaults globales no se tocan
+        self.assertEqual(env.set_stress_params({"tension_onset_cm": 20000}), [])   # inicio > marchitez: se rechaza
+        self.assertEqual(env.set_stress_params({"dev_topt_c": 5}), [])            # base < óptima < máxima

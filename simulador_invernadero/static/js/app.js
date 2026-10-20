@@ -207,6 +207,8 @@ document.addEventListener('DOMContentLoaded', () => {
         if (orgEl) orgEl.textContent = `${p.leaf_mass_g} / ${p.stem_mass_g} / ${p.root_mass_g} / ${p.flower_mass_g} g`;
         const carEl = document.getElementById('cropCarbon');
         if (carEl) carEl.textContent = `${p.lai} · ${p.a_canopy_umol} µmol/m²/s`;
+        const stEl = document.getElementById('cropStressInfo');
+        if (stEl && p.water_supply !== undefined) stEl.textContent = `${p.water_supply} · ${p.air_porosity_pct} % · ${p.stress_factor}`;
         const tisEl = document.getElementById('cropTissue');
         if (tisEl && p.tissue_pct) tisEl.textContent = `${p.tissue_pct.n} / ${p.tissue_pct.p} / ${p.tissue_pct.k} % (est. ${p.nutrient_status.n} / ${p.nutrient_status.p} / ${p.nutrient_status.k})`;
         const leafEl = document.getElementById('cropLeafArea');
@@ -453,6 +455,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (el) el.addEventListener('change', (ev) => {
             const v = parseFloat(ev.target.value);
             if (!isNaN(v) && v >= 0) sendCmd({ cmd: 'set_nutrient', params: { [key]: v } });
+        });
+    });
+
+    [['inTensionOnset', 'tension_onset_cm'], ['inRootComp', 'root_compensation'], ['inApCrit', 'ap_crit_pct'], ['inInduction', 'induction_days']].forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', (ev) => {
+            const v = parseFloat(ev.target.value);
+            if (!isNaN(v) && v > 0) sendCmd({ cmd: 'set_stress', params: { [key]: v } });
         });
     });
 

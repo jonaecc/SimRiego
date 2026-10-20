@@ -135,6 +135,10 @@
                     <span id="cropTissue" class="kpi-val">--</span>
                 </div>
                 <div class="kpi-row">
+                    <span class="kpi-label" title="Suministro de agua de la raíz (1 = sin sequía ni sal), porosidad con aire y factor de estrés combinado sobre la fotosíntesis.">Agua · aire · estrés:</span>
+                    <span id="cropStressInfo" class="kpi-val">--</span>
+                </div>
+                <div class="kpi-row">
                     <span class="kpi-label" title="Índice de área foliar y fotosíntesis neta del dosel.">LAI · A dosel:</span>
                     <span id="cropCarbon" class="kpi-val">--</span>
                 </div>
@@ -318,10 +322,17 @@
                 </div>
 
                 <div class="modal-grid">
-                    <div class="field-item"><label title="Absorción activa máxima de N [mg/g raíz/día] (modelo, no medida)">Vmax N [mg/g raíz/d]</label><input type="number" id="inVmaxN" min="1" max="200" step="1" value="40"></div>
+                    <div class="field-item"><label title="Absorción activa máxima de N [mg/g raíz/día] (modelo, no medida)">Vmax N [mg/g raíz/d]</label><input type="number" id="inVmaxN" min="1" max="300" step="1" value="60"></div>
                     <div class="field-item"><label title="Absorción activa máxima de K [mg/g raíz/día] (modelo, no medida)">Vmax K [mg/g raíz/d]</label><input type="number" id="inVmaxK" min="1" max="200" step="1" value="40"></div>
                     <div class="field-item"><label title="Tampón del sustrato: mmol H⁺ por L y unidad de pH (modelo)">Tampón [mmol/L/pH]</label><input type="number" id="inBuffer" min="1" max="200" step="1" value="25"></div>
                     <div class="field-item"><label title="Fracción del N absorbido como amonio (acidifica la rizosfera)">NH₄ del N [0–1]</label><input type="number" id="inNh4" min="0" max="1" step="0.01" value="0.06"></div>
+                </div>
+
+                <div class="modal-grid">
+                    <div class="field-item"><label title="Tensión del sustrato desde la que la raíz extrae menos agua (valor del modelo, sin dato medido en cannabis)">Inicio sequía [cm]</label><input type="number" id="inTensionOnset" min="50" max="14000" step="50" value="400"></div>
+                    <div class="field-item"><label title="Fracción de raíz sana que basta para no sufrir sequía">Compensación raíz [0–1]</label><input type="number" id="inRootComp" min="0.1" max="1" step="0.05" value="0.5"></div>
+                    <div class="field-item"><label title="Porosidad con aire bajo la que empieza la hipoxia radicular">Aire mín. [%]</label><input type="number" id="inApCrit" min="1" max="30" step="0.5" value="8"></div>
+                    <div class="field-item"><label title="Días cortos (≤13,5 h) acumulados para inducir la floración">Inducción [días]</label><input type="number" id="inInduction" min="0.1" max="14" step="0.5" value="3"></div>
                 </div>
 
                 <div class="kpi-row" style="margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 6px;">
