@@ -227,7 +227,10 @@ def transpiration_ml_min(leaf_area_m2, footprint_m2, ppfd, vpd_kpa, temp_c, co2_
     delta = 4098.0 * es / (temp_c + 237.3) ** 2             # kPa/°C
     gamma = 0.0666                                          # kPa/°C a nivel del mar
     rho_cp = 101.3 / (0.287 * (temp_c + 273.15)) * 1.013    # kJ/m³/K
-    adv = rho_cp * max(0.0, vpd_kpa) * aero_cond_m_s * 1000.0 * f_int   # W/m²
+    # Término de VPD (advección): crece con la raíz cuadrada de la cobertura, no con la cobertura. En un dosel
+    # ralo cada hoja intercambia con el aire por separado y transpira casi como una hoja aislada; con la
+    # cobertura lineal una plántula transpiraba 3-4 veces menos de lo medido por hoja y su WUE salía ~12 g/L.
+    adv = rho_cp * max(0.0, vpd_kpa) * aero_cond_m_s * 1000.0 * math.sqrt(f_int)   # W/m²
     lam_e = (delta * rn + adv) / (delta + gamma * (1.0 + aero_cond_m_s / gc))
     liters_m2_s = max(0.0, lam_e) / 2.45e6
     return liters_m2_s * footprint_m2 * 1000.0 * 60.0       # mL/min por planta
@@ -1213,7 +1216,14 @@ class GreenhouseEnvironment:
         self.target_rh_day = 62.0
         self.target_rh_night = 55.0
         self.light_dimmer_pct = 100.0
-        self.ppfd_max = 950
+        # Luminaria: potencia eléctrica, eficacia de fotones y área iluminada fijan el PPFD del dosel.
+        # Todo se edita a mano (set_lamp); el valor de partida es una lámpara LED de 400 W sobre las 12 macetas.
+        self.lamp_watts = 400.0
+        self.lamp_efficacy_umol_j = 2.5      # µmol de fotones por J eléctrico (LED hortícola típico 2,3–3,0)
+        self.lamp_utilization = 0.85         # fracción de fotones que llega al dosel (el resto se pierde en paredes y bordes)
+        self.lamp_area_m2 = 3.0              # área iluminada: 12 macetas de 50 × 50 cm
+        self.ppfd_source = "lamp"            # "lamp" (calculado) o "manual" (valor escrito a mano)
+        self.ppfd_max = round(self.lamp_ppfd())
         self.plant_footprint_m2 = 0.25      # área de suelo por planta (50 cm × 50 cm)
         self.aero_conductance_m_s = 0.02    # conductancia aerodinámica del dosel (ventilación)
         
@@ -1273,6 +1283,60 @@ class GreenhouseEnvironment:
             return self.light_on_hour <= h < self.light_off_hour
         else:
             return h >= self.light_on_hour or h < self.light_off_hour
+
+    def lamp_ppfd(self):
+        """PPFD medio del dosel a plena potencia [µmol/m²/s]: W × µmol/J × utilización / área."""
+        return self.lamp_watts * self.lamp_efficacy_umol_j * self.lamp_utilization / max(self.lamp_area_m2, 1e-6)
+
+    def set_lamp(self, values):
+        """Define a MANO la luminaria y recalcula el PPFD máximo del dosel. Valores finitos y positivos;
+        la utilización va de 0 a 1. Devuelve las claves aplicadas."""
+        keys = {"lamp_watts": (1.0, 20000.0), "lamp_efficacy_umol_j": (0.5, 4.0),
+                "lamp_utilization": (0.05, 1.0), "lamp_area_m2": (0.05, 100.0)}
+        applied = []
+        for key, val in (values or {}).items():
+            if key not in keys:
+                continue
+            try:
+                v = float(val)
+            except (TypeError, ValueError):
+                continue
+            lo, hi = keys[key]
+            if not math.isfinite(v) or v < lo or v > hi:
+                continue
+            setattr(self, key, v)
+            applied.append(key)
+        if applied:
+            self.ppfd_max = round(self.lamp_ppfd())
+            self.ppfd_source = "lamp"
+        return sorted(applied)
+
+    def set_ppfd_manual(self, value):
+        """Fija a mano el PPFD máximo del dosel (por ejemplo, medido con un cuantómetro)."""
+        v = float(value)
+        if math.isfinite(v):
+            self.ppfd_max = max(0.0, min(3000.0, v))
+            self.ppfd_source = "manual"
+
+    def lamp_report(self):
+        """Cifras físicas para reproducir la luz en un cuarto real."""
+        hours = (self.light_off_hour - self.light_on_hour) % 24.0 or 24.0
+        ppfd = self.ppfd_max * self.light_dimmer_pct / 100.0
+        watts = self.lamp_watts * self.light_dimmer_pct / 100.0
+        return {
+            "source": self.ppfd_source,
+            "watts": round(self.lamp_watts, 1),
+            "efficacy_umol_j": self.lamp_efficacy_umol_j,
+            "utilization": self.lamp_utilization,
+            "area_m2": self.lamp_area_m2,
+            "ppfd_lamp": round(self.lamp_ppfd(), 0),
+            "ppfd_now_max": round(ppfd, 0),
+            "photoperiod_h": round(hours, 1),
+            "dli_mol_m2_d": round(ppfd * hours * 3600.0 / 1e6, 1),
+            "kwh_per_day": round(watts * hours / 1000.0, 2),
+            "w_per_plant": round(watts / max(1, len(self.plants)), 1),
+            "heat_btu_h": round(watts * 3.412, 0),
+        }
 
     @property
     def current_ppfd(self):
@@ -2130,6 +2194,7 @@ class GreenhouseEnvironment:
                 "ppfd": self.current_ppfd,
                 "light_dimmer": self.light_dimmer_pct,
                 "ppfd_max": self.ppfd_max,
+                "lamp": self.lamp_report(),
                 "plant_footprint_m2": self.plant_footprint_m2,
                 "aero_conductance_m_s": self.aero_conductance_m_s,
                 "co2_ppm": self.co2_ppm,

@@ -191,6 +191,16 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('kpiTemp').textContent = `${e.air_temp} °C`;
         document.getElementById('kpiRH').textContent = `${e.air_rh}%`;
         document.getElementById('kpiPPFD').textContent = `${e.ppfd} µmol`;
+        const lamp = e.lamp;
+        if (lamp) {
+            const info = document.getElementById('lampInfo');
+            if (info) info.textContent = `${lamp.ppfd_now_max} µmol/m²/s (${lamp.source === 'lamp' ? 'calculado' : 'manual'}) · DLI ${lamp.dli_mol_m2_d} mol/m²/d · ${lamp.kwh_per_day} kWh/d · ${lamp.w_per_plant} W/planta`;
+            [['inLampW', lamp.watts], ['inLampEff', lamp.efficacy_umol_j], ['inLampUtil', lamp.utilization],
+             ['inLampArea', lamp.area_m2], ['inPpfdMax', e.ppfd_max]].forEach(([id, val]) => {
+                const el = document.getElementById(id);
+                if (el && document.activeElement !== el) el.value = val;
+            });
+        }
         const autoTrayService = document.getElementById('autoTrayService');
         if (autoTrayService && document.activeElement !== autoTrayService) {
             autoTrayService.checked = e.auto_empty_and_tare_end_p2;
@@ -439,6 +449,14 @@ document.addEventListener('DOMContentLoaded', () => {
         if (el) el.addEventListener('change', (ev) => {
             const v = parseFloat(ev.target.value);
             if (!isNaN(v)) sendCmd({ cmd: 'set_climate', [key]: v });
+        });
+    });
+
+    [['inLampW', 'lamp_watts'], ['inLampEff', 'lamp_efficacy_umol_j'], ['inLampUtil', 'lamp_utilization'], ['inLampArea', 'lamp_area_m2']].forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', (ev) => {
+            const v = parseFloat(ev.target.value);
+            if (!isNaN(v) && v > 0) sendCmd({ cmd: 'set_lamp', params: { [key]: v } });
         });
     });
 

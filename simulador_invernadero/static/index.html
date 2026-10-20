@@ -310,7 +310,16 @@
                 </div>
 
                 <div class="modal-grid">
-                    <div class="field-item"><label>PPFD máx. dosel [µmol/m²/s]</label><input type="number" id="inPpfdMax" min="0" max="3000" step="50" value="950"></div>
+                    <div class="field-item"><label title="Potencia eléctrica de la luminaria">Lámpara [W]</label><input type="number" id="inLampW" min="1" max="20000" step="10" value="400"></div>
+                    <div class="field-item"><label title="Fotones por J eléctrico del LED (típico 2,3–3,0)">Eficacia [µmol/J]</label><input type="number" id="inLampEff" min="0.5" max="4" step="0.1" value="2.5"></div>
+                    <div class="field-item"><label title="Fracción de fotones que llega al dosel">Utilización [0–1]</label><input type="number" id="inLampUtil" min="0.05" max="1" step="0.05" value="0.85"></div>
+                    <div class="field-item"><label title="Área iluminada por la lámpara (12 macetas de 50 × 50 cm = 3 m²)">Área iluminada [m²]</label><input type="number" id="inLampArea" min="0.05" max="100" step="0.1" value="3"></div>
+                </div>
+                <div class="kpi-row">
+                    <span class="kpi-label" title="Cifras para reproducir la luz en un cuarto real">Luz: <b id="lampInfo" style="color:#fff;">--</b></span>
+                </div>
+                <div class="modal-grid">
+                    <div class="field-item"><label>PPFD máx. dosel [µmol/m²/s]</label><input type="number" id="inPpfdMax" min="0" max="3000" step="10" value="283" title="Se calcula con la lámpara; si lo escribe a mano, queda como valor manual (p. ej. medido con cuantómetro)"></div>
                     <div class="field-item"><label>Área por planta [m²]</label><input type="number" id="inFootprint" min="0.05" max="4" step="0.05" value="0.25"></div>
                     <div class="field-item"><label>Ventilación gₐ [m/s]</label><input type="number" id="inAeroCond" min="0.002" max="0.5" step="0.005" value="0.02"></div>
                 </div>

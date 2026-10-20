@@ -965,3 +965,67 @@ class StressAndPhenologyTests(unittest.TestCase):
         self.assertEqual(STRESS_DEFAULTS["tension_onset_cm"], 400.0)          # los defaults globales no se tocan
         self.assertEqual(env.set_stress_params({"tension_onset_cm": 20000}), [])   # inicio > marchitez: se rechaza
         self.assertEqual(env.set_stress_params({"dev_topt_c": 5}), [])            # base < óptima < máxima
+
+
+class LampTests(unittest.TestCase):
+    def test_default_is_a_400_w_led_over_the_twelve_pots(self):
+        env = GreenhouseEnvironment()
+        self.assertEqual((env.lamp_watts, env.lamp_area_m2, env.ppfd_source), (400.0, 3.0, "lamp"))
+        self.assertAlmostEqual(env.lamp_ppfd(), 400.0 * 2.5 * 0.85 / 3.0, places=6)
+        self.assertEqual(env.ppfd_max, round(400.0 * 2.5 * 0.85 / 3.0))
+
+    def test_lamp_edits_recompute_ppfd_and_reject_invalid_values(self):
+        env = GreenhouseEnvironment()
+        applied = env.set_lamp({"lamp_watts": 600, "lamp_area_m2": "1.5", "lamp_utilization": 1.5,
+                                "lamp_efficacy_umol_j": float("nan"), "nope": 1})
+        self.assertEqual(applied, ["lamp_area_m2", "lamp_watts"])
+        self.assertEqual(env.ppfd_max, round(600.0 * 2.5 * 0.85 / 1.5))
+        self.assertEqual(env.lamp_utilization, 0.85)
+        self.assertEqual(env.set_lamp({"lamp_watts": -5}), [])
+
+    def test_a_manual_ppfd_overrides_the_lamp_until_the_lamp_is_edited_again(self):
+        env = GreenhouseEnvironment()
+        env.set_ppfd_manual(640)
+        self.assertEqual((env.ppfd_max, env.ppfd_source), (640, "manual"))
+        self.assertEqual(env.lamp_report()["source"], "manual")
+        env.set_lamp({"lamp_watts": 400})
+        self.assertEqual(env.ppfd_source, "lamp")
+        self.assertEqual(env.ppfd_max, round(env.lamp_ppfd()))
+
+    def test_report_gives_real_world_figures_and_follows_the_dimmer(self):
+        env = GreenhouseEnvironment()
+        env.set_lamp({"lamp_area_m2": 1.5})
+        r = env.lamp_report()
+        self.assertAlmostEqual(r["dli_mol_m2_d"], r["ppfd_now_max"] * 18.0 * 3.6e-3, delta=0.1)
+        self.assertEqual(r["kwh_per_day"], 7.2)
+        self.assertAlmostEqual(r["w_per_plant"], 400.0 / 12, places=1)
+        self.assertEqual(r["heat_btu_h"], round(400.0 * 3.412))
+        env.light_dimmer_pct = 50.0
+        r2 = env.lamp_report()
+        self.assertAlmostEqual(r2["kwh_per_day"], 3.6, places=2)
+        self.assertAlmostEqual(r2["dli_mol_m2_d"], r["dli_mol_m2_d"] / 2.0, delta=0.1)
+        self.assertEqual(env.dump_state()["environment"]["lamp"]["watts"], 400.0)
+
+    def test_photon_energy_at_the_canopy_never_exceeds_electrical_power(self):
+        env = GreenhouseEnvironment()
+        env.set_lamp({"lamp_efficacy_umol_j": 4.0, "lamp_utilization": 1.0})
+        par_watts = env.lamp_ppfd() * env.lamp_area_m2 / 4.57       # µmol/s → W de radiación fotosintética
+        self.assertLess(par_watts, env.lamp_watts)
+
+
+class SparseCanopyTests(unittest.TestCase):
+    def test_sparse_canopy_transpires_per_leaf_area_between_canopy_mean_and_isolated_leaf(self):
+        """Medido: ~0,8 L/m² de hoja/día como media de dosel y ~3,4 mmol/m²/s en hoja iluminada aislada."""
+        for lai in (0.15, 0.3, 0.6):
+            ml_min = transpiration_ml_min(lai * 0.25, 0.25, 283.0, 1.1, 25.5, 400.0, 0.02, True)
+            l_per_m2_leaf_day = ml_min * 60.0 * 18.0 / 1000.0 / (lai * 0.25)
+            self.assertGreater(l_per_m2_leaf_day, 0.8, lai)
+            self.assertLess(l_per_m2_leaf_day, 3.0, lai)
+
+    def test_transpiration_per_plant_grows_with_leaf_area_and_matches_dense_canopy_range(self):
+        e = [transpiration_ml_min(l * 0.25, 0.25, 283.0, 1.1, 25.5, 400.0, 0.02, True) for l in (0.1, 0.3, 0.8, 2.0, 4.0)]
+        self.assertEqual(e, sorted(e))
+        dense = transpiration_ml_min(2.1 * 0.25, 0.25, 151.0, 1.27, 25.0, 400.0, 0.02, True) * 60.0 * 18.0 / 1000.0 / 0.25
+        self.assertAlmostEqual(dense, 1.9, delta=0.3)        # medido 1,9 L/m²/día con LAI 2,1 y PPFD 151
+        dense2 = transpiration_ml_min(4.4 * 0.25, 0.25, 703.0, 1.27, 25.0, 400.0, 0.02, True) * 60.0 * 18.0 / 1000.0 / 0.25
+        self.assertAlmostEqual(dense2, 3.4, delta=0.55)      # medido 3,4 con LAI 4,4 y PPFD 703
