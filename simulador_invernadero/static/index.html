@@ -115,7 +115,7 @@
                     <span id="cropHeight" class="kpi-val">5.0 cm</span>
                 </div>
                 <div class="kpi-row">
-                    <span class="kpi-label" title="El sensor mide la capa superior; el agua baja por gravedad y se acumula abajo.">VWC arriba / abajo:</span>
+                    <span class="kpi-label" title="Sensor (zona configurable) / mitad inferior. El agua baja por Richards y se acumula abajo (nivel colgante).">VWC arriba / abajo:</span>
                     <span id="cropVwcLayers" class="kpi-val">-- / --</span>
                 </div>
                 <div class="kpi-row">
@@ -125,6 +125,22 @@
                 <div class="kpi-row">
                     <span class="kpi-label">Biomasa seca:</span>
                     <span id="cropBiomass" class="kpi-val">2.0 g</span>
+                </div>
+                <div class="kpi-row">
+                    <span class="kpi-label" title="Masa seca por órgano. El reparto del carbono nuevo depende de los días desde el cambio 12/12.">Hoja / tallo / raíz / flor:</span>
+                    <span id="cropOrgans" class="kpi-val">-- g</span>
+                </div>
+                <div class="kpi-row">
+                    <span class="kpi-label" title="Contenido de N / P / K en el tejido (% de la masa seca) y estado = contenido / objetivo. Los objetivos son valores de referencia del modelo, no medidos.">Tejido N / P / K:</span>
+                    <span id="cropTissue" class="kpi-val">--</span>
+                </div>
+                <div class="kpi-row">
+                    <span class="kpi-label" title="Suministro de agua de la raíz (1 = sin sequía ni sal), porosidad con aire y factor de estrés combinado sobre la fotosíntesis.">Agua · aire · estrés:</span>
+                    <span id="cropStressInfo" class="kpi-val">--</span>
+                </div>
+                <div class="kpi-row">
+                    <span class="kpi-label" title="Índice de área foliar y fotosíntesis neta del dosel.">LAI · A dosel:</span>
+                    <span id="cropCarbon" class="kpi-val">--</span>
                 </div>
                 <div class="kpi-row">
                     <span class="kpi-label">Salud radicular:</span>
@@ -293,6 +309,41 @@
                     <input type="range" id="sliderLight" min="0" max="100" step="5" value="100">
                 </div>
 
+                <div class="modal-grid">
+                    <div class="field-item"><label title="Potencia eléctrica de la luminaria">Lámpara [W]</label><input type="number" id="inLampW" min="1" max="20000" step="10" value="400"></div>
+                    <div class="field-item"><label title="Fotones por J eléctrico del LED (típico 2,3–3,0)">Eficacia [µmol/J]</label><input type="number" id="inLampEff" min="0.5" max="4" step="0.1" value="2.5"></div>
+                    <div class="field-item"><label title="Fracción de fotones que llega al dosel">Utilización [0–1]</label><input type="number" id="inLampUtil" min="0.05" max="1" step="0.05" value="0.85"></div>
+                    <div class="field-item"><label title="Área iluminada por la lámpara (12 macetas de 50 × 50 cm = 3 m²)">Área iluminada [m²]</label><input type="number" id="inLampArea" min="0.05" max="100" step="0.1" value="3"></div>
+                </div>
+                <div class="kpi-row">
+                    <span class="kpi-label" title="Cifras para reproducir la luz en un cuarto real">Luz: <b id="lampInfo" style="color:#fff;">--</b></span>
+                </div>
+                <div class="modal-grid">
+                    <div class="field-item"><label>PPFD máx. dosel [µmol/m²/s]</label><input type="number" id="inPpfdMax" min="0" max="3000" step="10" value="283" title="Se calcula con la lámpara; si lo escribe a mano, queda como valor manual (p. ej. medido con cuantómetro)"></div>
+                    <div class="field-item"><label>Área por planta [m²]</label><input type="number" id="inFootprint" min="0.05" max="4" step="0.05" value="0.25"></div>
+                    <div class="field-item"><label>Ventilación gₐ [m/s]</label><input type="number" id="inAeroCond" min="0.002" max="0.5" step="0.005" value="0.02"></div>
+                </div>
+                <div class="modal-grid">
+                    <div class="field-item"><label title="Fotosíntesis saturada efectiva del dosel">Amax dosel [µmol CO₂/m²/s]</label><input type="number" id="inAmax" min="1" max="60" step="0.5" value="11"></div>
+                    <div class="field-item"><label title="Rendimiento cuántico">α [mol CO₂/mol fotón]</label><input type="number" id="inAlpha" min="0.01" max="0.12" step="0.002" value="0.06"></div>
+                    <div class="field-item"><label title="Peso específico foliar: área = masa foliar / SLW">SLW [g/m²]</label><input type="number" id="inSlw" min="10" max="120" step="1" value="45"></div>
+                    <div class="field-item"><label title="Eficiencia de crecimiento">Yg [g/g CH₂O]</label><input type="number" id="inYg" min="0.3" max="0.95" step="0.01" value="0.7"></div>
+                </div>
+
+                <div class="modal-grid">
+                    <div class="field-item"><label title="Absorción activa máxima de N [mg/g raíz/día] (modelo, no medida)">Vmax N [mg/g raíz/d]</label><input type="number" id="inVmaxN" min="1" max="300" step="1" value="60"></div>
+                    <div class="field-item"><label title="Absorción activa máxima de K [mg/g raíz/día] (modelo, no medida)">Vmax K [mg/g raíz/d]</label><input type="number" id="inVmaxK" min="1" max="200" step="1" value="40"></div>
+                    <div class="field-item"><label title="Tampón del sustrato: mmol H⁺ por L y unidad de pH (modelo)">Tampón [mmol/L/pH]</label><input type="number" id="inBuffer" min="1" max="200" step="1" value="25"></div>
+                    <div class="field-item"><label title="Fracción del N absorbido como amonio (acidifica la rizosfera)">NH₄ del N [0–1]</label><input type="number" id="inNh4" min="0" max="1" step="0.01" value="0.06"></div>
+                </div>
+
+                <div class="modal-grid">
+                    <div class="field-item"><label title="Tensión del sustrato desde la que la raíz extrae menos agua (valor del modelo, sin dato medido en cannabis)">Inicio sequía [cm]</label><input type="number" id="inTensionOnset" min="50" max="14000" step="50" value="400"></div>
+                    <div class="field-item"><label title="Fracción de raíz sana que basta para no sufrir sequía">Compensación raíz [0–1]</label><input type="number" id="inRootComp" min="0.1" max="1" step="0.05" value="0.5"></div>
+                    <div class="field-item"><label title="Porosidad con aire bajo la que empieza la hipoxia radicular">Aire mín. [%]</label><input type="number" id="inApCrit" min="1" max="30" step="0.5" value="8"></div>
+                    <div class="field-item"><label title="Días cortos (≤13,5 h) acumulados para inducir la floración">Inducción [días]</label><input type="number" id="inInduction" min="0.1" max="14" step="0.5" value="3"></div>
+                </div>
+
                 <div class="kpi-row" style="margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.05); padding-top: 6px;">
                     <span class="kpi-label">Temp Actual: <b id="kpiTemp" style="color:#fff;">25.0°C</b></span>
                     <span class="kpi-label">HR: <b id="kpiRH" style="color:#fff;">60%</b></span>
@@ -420,6 +471,14 @@
                                 <option value="TURBA">Turba</option>
                                 <option value="SUELO">Suelo</option>
                             </select>
+                        </div>
+                        <div class="field-item">
+                            <label title="Profundidad del sensor de VWC/EC como % de la altura de la maceta, medida desde arriba. Lee el promedio entre ambos límites.">SENSOR: DESDE [% profundidad]</label>
+                            <input type="number" step="5" min="0" max="90" id="cfg_sensor_z0">
+                        </div>
+                        <div class="field-item">
+                            <label>SENSOR: HASTA [% profundidad]</label>
+                            <input type="number" step="5" min="10" max="100" id="cfg_sensor_z1">
                         </div>
                     </div>
 

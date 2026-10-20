@@ -191,6 +191,16 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('kpiTemp').textContent = `${e.air_temp} °C`;
         document.getElementById('kpiRH').textContent = `${e.air_rh}%`;
         document.getElementById('kpiPPFD').textContent = `${e.ppfd} µmol`;
+        const lamp = e.lamp;
+        if (lamp) {
+            const info = document.getElementById('lampInfo');
+            if (info) info.textContent = `${lamp.ppfd_now_max} µmol/m²/s (${lamp.source === 'lamp' ? 'calculado' : 'manual'}) · DLI ${lamp.dli_mol_m2_d} mol/m²/d · ${lamp.kwh_per_day} kWh/d · ${lamp.w_per_plant} W/planta`;
+            [['inLampW', lamp.watts], ['inLampEff', lamp.efficacy_umol_j], ['inLampUtil', lamp.utilization],
+             ['inLampArea', lamp.area_m2], ['inPpfdMax', e.ppfd_max]].forEach(([id, val]) => {
+                const el = document.getElementById(id);
+                if (el && document.activeElement !== el) el.value = val;
+            });
+        }
         const autoTrayService = document.getElementById('autoTrayService');
         if (autoTrayService && document.activeElement !== autoTrayService) {
             autoTrayService.checked = e.auto_empty_and_tare_end_p2;
@@ -203,6 +213,14 @@ document.addEventListener('DOMContentLoaded', () => {
         document.getElementById('cropBiomass').textContent = `${p.biomass_g} g`;
         const layersEl = document.getElementById('cropVwcLayers');
         if (layersEl) layersEl.textContent = `${p.vwc} / ${p.vwc_bottom} %`;
+        const orgEl = document.getElementById('cropOrgans');
+        if (orgEl) orgEl.textContent = `${p.leaf_mass_g} / ${p.stem_mass_g} / ${p.root_mass_g} / ${p.flower_mass_g} g`;
+        const carEl = document.getElementById('cropCarbon');
+        if (carEl) carEl.textContent = `${p.lai} · ${p.a_canopy_umol} µmol/m²/s`;
+        const stEl = document.getElementById('cropStressInfo');
+        if (stEl && p.water_supply !== undefined) stEl.textContent = `${p.water_supply} · ${p.air_porosity_pct} % · ${p.stress_factor}`;
+        const tisEl = document.getElementById('cropTissue');
+        if (tisEl && p.tissue_pct) tisEl.textContent = `${p.tissue_pct.n} / ${p.tissue_pct.p} / ${p.tissue_pct.k} % (est. ${p.nutrient_status.n} / ${p.nutrient_status.p} / ${p.nutrient_status.k})`;
         const leafEl = document.getElementById('cropLeafArea');
         if (leafEl) leafEl.textContent = `${p.leaf_area_m2} m²`;
         document.getElementById('cropRootHealth').textContent = `${p.root_health_pct}%`;
@@ -426,6 +444,46 @@ document.addEventListener('DOMContentLoaded', () => {
         sendCmd({ cmd: 'set_climate', light_dimmer: e.target.value });
     });
 
+    [['inPpfdMax', 'ppfd_max'], ['inFootprint', 'footprint_m2'], ['inAeroCond', 'aero_cond']].forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', (ev) => {
+            const v = parseFloat(ev.target.value);
+            if (!isNaN(v)) sendCmd({ cmd: 'set_climate', [key]: v });
+        });
+    });
+
+    [['inLampW', 'lamp_watts'], ['inLampEff', 'lamp_efficacy_umol_j'], ['inLampUtil', 'lamp_utilization'], ['inLampArea', 'lamp_area_m2']].forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', (ev) => {
+            const v = parseFloat(ev.target.value);
+            if (!isNaN(v) && v > 0) sendCmd({ cmd: 'set_lamp', params: { [key]: v } });
+        });
+    });
+
+    [['inAmax', 'amax'], ['inAlpha', 'alpha'], ['inSlw', 'slw'], ['inYg', 'yg']].forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', (ev) => {
+            const v = parseFloat(ev.target.value);
+            if (!isNaN(v) && v > 0) sendCmd({ cmd: 'set_carbon', params: { [key]: v } });
+        });
+    });
+
+    [['inVmaxN', 'vmax_n'], ['inVmaxK', 'vmax_k'], ['inBuffer', 'buffer_mmol_l_ph'], ['inNh4', 'nh4_fraction']].forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', (ev) => {
+            const v = parseFloat(ev.target.value);
+            if (!isNaN(v) && v >= 0) sendCmd({ cmd: 'set_nutrient', params: { [key]: v } });
+        });
+    });
+
+    [['inTensionOnset', 'tension_onset_cm'], ['inRootComp', 'root_compensation'], ['inApCrit', 'ap_crit_pct'], ['inInduction', 'induction_days']].forEach(([id, key]) => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('change', (ev) => {
+            const v = parseFloat(ev.target.value);
+            if (!isNaN(v) && v > 0) sendCmd({ cmd: 'set_stress', params: { [key]: v } });
+        });
+    });
+
     // 5. MODAL DE CONFIGURACIÓN DE RIEGO (P1 / P2 / P3)
     const modalConfig = document.getElementById('modalConfig');
     const btnOpenConfig = document.getElementById('btnOpenConfig');
@@ -483,6 +541,8 @@ document.addEventListener('DOMContentLoaded', () => {
         // P1
         document.getElementById('cfg_pot_volume_ml').value = cfg.pot_volume_ml;
         document.getElementById('cfg_substrate_type').value = latestState.plant_focus.substrate_type;
+        document.getElementById('cfg_sensor_z0').value = cfg.sensor_z0_pct;
+        document.getElementById('cfg_sensor_z1').value = cfg.sensor_z1_pct;
         if (latestState) renderCcStatus(latestState.plant_focus, cfg);
         document.getElementById('cfg_p1_vwc_min').value = cfg.p1_vwc_min;
         document.getElementById('cfg_p1_ec_target').value = cfg.p1_ec_target;
@@ -509,6 +569,8 @@ document.addEventListener('DOMContentLoaded', () => {
             p1_vwc_min: parseFloat(document.getElementById('cfg_p1_vwc_min').value),
             p1_ec_target: parseFloat(document.getElementById('cfg_p1_ec_target').value),
             pot_volume_ml: parseFloat(document.getElementById('cfg_pot_volume_ml').value),
+            sensor_z0_pct: parseFloat(document.getElementById('cfg_sensor_z0').value),
+            sensor_z1_pct: parseFloat(document.getElementById('cfg_sensor_z1').value),
             p1_shot_pc: parseFloat(document.getElementById('cfg_p1_shot_pc').value),
             p1_tiempo_entre_min: parseInt(document.getElementById('cfg_p1_tiempo_entre').value),
             p1_runoff_max: parseFloat(document.getElementById('cfg_p1_runoff_max').value),
